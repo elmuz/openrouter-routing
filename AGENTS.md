@@ -70,6 +70,7 @@ authenticated call; unauthenticated calls return null for them.
 ## Current project phase
 
 Phase 0–2 are implemented: packaging, git, tests, XDG config, and the
-`measure` / `cheapest` / `preset` CLI. Later phases add project/model filters
-beyond the current set, the `refresh` workflow, a local pi `models.json` target,
-and opt-in systemd installation.
+`measure` / `cheapest` / `preset` CLI. Phase 3 is partially implemented (project,
+model, routed-model, time, and grouping filters). See `PLAN.md` for the detailed
+roadmap: refresh workflow, local pi `models.json` target, opt-in systemd
+installation, and cost verification.

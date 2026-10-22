@@ -271,8 +271,9 @@ uv run ruff format --check .
 The runtime has no third-party dependencies. Tests use fixture sessions and
 injected HTTP clients, so the default test run never touches the network.
 
-See `AGENTS.md` for repository invariants and `.agents/skills/openrouter-cost-routing/`
-for the agent-facing OpenRouter billing/routing references.
+See `AGENTS.md` for repository invariants, `PLAN.md` for the detailed phase plan
+and roadmap, and `.agents/skills/openrouter-cost-routing/` for the agent-facing
+OpenRouter billing/routing references.
 
 ## Notes and limits
 
