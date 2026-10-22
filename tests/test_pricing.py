@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from openrouter_routing.pricing import pct_stat, price, score_endpoint
+from openrouter_routing.pricing import estimated_cost, pct_stat, price, score_endpoint
 
 
 def endpoint(**overrides):
@@ -61,3 +61,20 @@ def test_pct_stat_and_as_dict() -> None:
     blob = row.as_dict()
     assert blob["in"] == pytest.approx(1.0)
     assert blob["cr"] == pytest.approx(0.1)
+
+
+def test_estimated_cost_uses_cache_prices() -> None:
+    row = score_endpoint(endpoint(), f=0.9, r=0.01, fw=0.1)
+    mix = {"input": 10, "cacheRead": 90, "output": 5, "cacheWrite": 2}
+    assert estimated_cost(mix, row) == pytest.approx((10 * 1 + 90 * 0.1 + 5 * 2 + 2 * 1.25) / 1e6)
+
+
+def test_estimated_cost_no_cache_bills_reads_as_input() -> None:
+    row = score_endpoint(
+        endpoint(pricing={"prompt": "0.000001", "completion": "0.000002"}),
+        f=0.9,
+        r=0.01,
+        fw=0.1,
+    )
+    mix = {"input": 10, "cacheRead": 90, "output": 5, "cacheWrite": 2}
+    assert estimated_cost(mix, row) == pytest.approx((100 * 1 + 5 * 2) / 1e6)

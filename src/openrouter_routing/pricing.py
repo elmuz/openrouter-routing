@@ -96,6 +96,23 @@ def score_endpoint(ep: dict[str, Any], f: float, r: float, fw: float) -> Endpoin
     )
 
 
+def estimated_cost(mix: dict[str, Any], endpoint: EndpointScore) -> float:
+    """USD cost of a mix's token counters on one endpoint (prices are per 1M)."""
+    n_in = int(mix.get("input") or 0)
+    n_out = int(mix.get("output") or 0)
+    n_cr = int(mix.get("cacheRead") or 0)
+    n_cw = int(mix.get("cacheWrite") or 0)
+    if endpoint.cached:
+        p_cr = endpoint.cr_price or 0.0
+        p_cw = endpoint.cw_price or 0.0
+    else:
+        # No cache: every cache-read token is billed as a fresh input token and
+        # cache writes cannot happen on that endpoint.
+        p_cr = endpoint.in_price
+        p_cw = 0.0
+    return (n_in * endpoint.in_price + n_cr * p_cr + n_out * endpoint.out_price + n_cw * p_cw) / 1e6
+
+
 def pct_stat(stat: dict[str, Any] | None, percentile: str) -> float | None:
     value = (stat or {}).get(percentile)
     return float(value) if isinstance(value, (int, float)) else None

@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from openrouter_routing.errors import ConfigError
-from openrouter_routing.mix import accumulate, filter_records, group_by, time_filtered
+from openrouter_routing.mix import (
+    accumulate,
+    apply_window,
+    filter_last_sessions,
+    filter_records,
+    group_by,
+    resolve_window,
+    time_filtered,
+    validate_project_roots,
+)
 from openrouter_routing.sessions import load_records
 
 
@@ -79,3 +90,54 @@ def test_group_by(records) -> None:
     groups = group_by(records, "project")
     assert set(groups) == {"/home/alice/projects/alpha", "/home/alice/projects/beta"}
     assert len(group_by(records, "routed-model")["?"]) == 1
+
+
+def test_filter_by_provider_and_exclude_project(records) -> None:
+    assert len(filter_records(records, providers=["openrouter"])) == 6
+    assert filter_records(records, providers=["nope"]) == []
+    rows = filter_records(records, exclude_projects=["/home/alice/projects/alpha"])
+    assert len(rows) == 3
+    assert {row.cwd for row in rows} == {"/home/alice/projects/beta"}
+
+
+def test_validate_project_roots_rejects_root() -> None:
+    with pytest.raises(ConfigError, match="filesystem root"):
+        validate_project_roots(["/"])
+    with pytest.raises(ConfigError):
+        validate_project_roots(["  "])
+    validate_project_roots(["/home/alice/projects/alpha"])
+
+
+def test_last_sessions_uses_most_recent(records) -> None:
+    assert len(filter_last_sessions(records, None)) == 6
+    assert len(filter_last_sessions(records, 2)) == 6
+    recent = filter_last_sessions(records, 1)
+    assert len(recent) == 3
+    assert {row.session_id for row in recent} == {"beta-session"}
+    with pytest.raises(ConfigError):
+        filter_last_sessions(records, 0)
+
+
+def test_resolve_window_anchor_and_explicit_bounds(records) -> None:
+    latest = resolve_window(records, hours=12)
+    assert latest.relative is True
+    assert latest.since == datetime(2026, 1, 2, 0, 0, 3, tzinfo=UTC)
+    assert latest.until is None
+
+    now = resolve_window(records, hours=12, anchor="now")
+    assert now.relative is True
+    assert now.since > datetime(2026, 1, 2, 12, 0, 3, tzinfo=UTC)
+    assert apply_window(records, now) == []
+
+    explicit = resolve_window(records, since="2026-01-01T10:00:02.000Z", until="2026-01-01T10:00:03.000Z")
+    assert explicit.relative is False
+    assert [row.message_id for row in apply_window(records, explicit)] == ["a2", "a3"]
+
+    # --since wins over a relative window.
+    mixed = resolve_window(records, hours=1, since="2026-01-02T12:00:02.000Z")
+    assert mixed.relative is False
+    assert mixed.hours is None
+    assert mixed.since == datetime(2026, 1, 2, 12, 0, 2, tzinfo=UTC)
+
+    with pytest.raises(ConfigError):
+        resolve_window(records, hours=1, anchor="yesterday")

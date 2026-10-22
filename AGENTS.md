@@ -69,8 +69,12 @@ authenticated call; unauthenticated calls return null for them.
 
 ## Current project phase
 
-Phase 0–2 are implemented: packaging, git, tests, XDG config, and the
-`measure` / `cheapest` / `preset` CLI. Phase 3 is partially implemented (project,
-model, routed-model, time, and grouping filters). See `PLAN.md` for the detailed
-roadmap: refresh workflow, local pi `models.json` target, opt-in systemd
-installation, and cost verification.
+Phase 0–3 are implemented: packaging, git, tests, XDG config, the
+`measure` / `cheapest` / `preset` CLI, full analysis filters, `--anchor now`,
+`--last-sessions`, `--top-projects`, opt-in `--cost-model`, TSV output, and
+session-source/robustness work. See `PLAN.md` for the remaining roadmap:
+refresh workflow, local pi `models.json` target, opt-in systemd installation,
+and cost verification.
+
+`measure` is offline unless `--cost-model` is passed; that is the one opt-in
+network path and it must stay read-only.

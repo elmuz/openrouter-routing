@@ -29,6 +29,7 @@ DEFAULT_CONFIG_TEMPLATE = """\
 [measure]
 # Only apply a default window when no --hours/--days/--since is passed.
 # days = 7
+# anchor = "latest"            # latest record (reproducible) or wall clock ("now")
 # projects = ["~/code", "~/projects"]
 # models = ["@preset/ds4-flash"]
 # routed_models = []
@@ -73,6 +74,7 @@ class MeasureConfig:
     hours: float | None = None
     since: str | None = None
     until: str | None = None
+    anchor: str = "latest"
     models: tuple[str, ...] = ()
     routed_models: tuple[str, ...] = ()
     exclude_models: tuple[str, ...] = ()
@@ -132,6 +134,7 @@ class AppConfig:
                 "hours": self.measure.hours,
                 "since": self.measure.since,
                 "until": self.measure.until,
+                "anchor": self.measure.anchor,
                 "models": list(self.measure.models),
                 "routed_models": list(self.measure.routed_models),
                 "exclude_models": list(self.measure.exclude_models),
@@ -217,11 +220,15 @@ def _paths_from(data: dict[str, Any], base: Path) -> PathsConfig:
 
 
 def _measure_from(data: dict[str, Any]) -> MeasureConfig:
+    anchor = _as_str(data.get("anchor"), "measure.anchor") or "latest"
+    if anchor not in {"latest", "now"}:
+        raise ConfigError("measure.anchor must be 'latest' or 'now'")
     return MeasureConfig(
         days=_as_float(data.get("days"), "measure.days"),
         hours=_as_float(data.get("hours"), "measure.hours"),
         since=_as_str(data.get("since"), "measure.since"),
         until=_as_str(data.get("until"), "measure.until"),
+        anchor=anchor,
         models=_as_str_list(data.get("models"), "measure.models"),
         routed_models=_as_str_list(data.get("routed_models"), "measure.routed_models"),
         exclude_models=_as_str_list(data.get("exclude_models"), "measure.exclude_models"),

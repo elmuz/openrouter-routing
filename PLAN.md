@@ -33,18 +33,18 @@ Constraints and preferences:
 | 0 | Repository bootstrap | Done |
 | 1 | Package refactor, tests, CI | Done |
 | 2 | XDG config, CLI, early filters | Done |
-| 3 | Analysis polish and remaining filters | Partially done |
+| 3 | Analysis polish and remaining filters | Done |
 | 4 | `refresh` workflow and local pi target | Not started |
 | 5 | Opt-in systemd automation | Not started |
 | 6 | Cost verification and hardening | Not started |
 | 7 | Other harness adapters | Deferred / low priority |
 
-Current commit: `1338379 Initial Python package with XDG config and tests`.
+Phase 3 work is on top of `1338379 Initial Python package with XDG config and tests`.
 
 Validation at the time of writing:
 
 ```text
-uv run pytest                    44 passed
+uv run pytest                    65 passed
 uv run ruff check .              clean
 uv run ruff format --check .     clean
 GitHub Actions                   Python 3.11, 3.12, 3.13, 3.14 green
@@ -237,53 +237,68 @@ Early Phase 3 work landed here because it was cheap and improved usability:
 - session cwd extraction from the pi `type:"session"` header
 - routed model extraction from `responseModel`
 
-## 8. Phase 3 — Analysis polish (remaining)
+## 8. Phase 3 — Analysis polish (done)
 
 ### 3.1 Time-window controls
 
-- [ ] Expose `--anchor latest|now` on `measure`. The library already supports it;
-      the CLI currently always uses `latest`.
-- [ ] Add `--last-sessions N` for recent-session analysis.
-- [ ] Make `--until` exclusive/inclusive semantics explicit in help and tests.
-- [ ] Print the resolved absolute window in text output even for `--since`.
-- [ ] Add tests for `--anchor now` and `--last-sessions`.
+- [x] Expose `--anchor latest|now` on `measure`. The library already supports it;
+      the CLI now uses it, and `measure.anchor` can set the default.
+- [x] Add `--last-sessions N` for recent-session analysis.
+- [x] Make `--until` exclusive/inclusive semantics explicit in help and tests
+      (both bounds are inclusive).
+- [x] Print the resolved absolute window in text output even for `--since`.
+- [x] Add tests for `--anchor now` and `--last-sessions`.
 
 Acceptance: a daily refresh can request "last 7 days from wall clock now" while
 ad-hoc analysis keeps the reproducible latest-record behavior.
 
 ### 3.2 More filters and summaries
 
-- [ ] Add `--provider` filter (useful when other providers are ever present).
-- [ ] Add `--exclude-project`.
-- [ ] Add `--top-projects N` summary: requests, token totals, `f`, `R`, `C_eff`
+- [x] Add `--provider` filter (useful when other providers are ever present).
+- [x] Add `--exclude-project`.
+- [x] Add `--top-projects N` summary: requests, token totals, `f`, `R`, `C_eff`
       weights.
-- [ ] Add optional per-group estimated cost using a selected model/mix.
-- [ ] Make `--by` output deterministic and optionally `--json` only.
-- [ ] Validate that multiple `--project` roots cannot accidentally include `/`.
+- [x] Add optional per-group estimated cost using a selected model/mix
+      (`--cost-model`, the only network-touching `measure` option).
+- [x] Make `--by` output deterministic and optionally `--json` only.
+- [x] Validate that multiple `--project` roots cannot accidentally include `/`.
 
 Acceptance: the author can answer "what does my daily work in this repo tree
 look like?" without post-processing JSON.
 
 ### 3.3 Session robustness
 
-- [ ] Fallback cwd inference from the pi session directory name if a header is
-      missing.
-- [ ] Handle session header variants (`type: session` with whitespace, older
-      versions).
-- [ ] Add a `SessionSource` protocol so future harnesses are adapters rather
+- [x] Fallback cwd inference from the pi session directory name if a header is
+      missing (best-effort; the directory encoding is lossy for hyphens).
+- [x] Handle session header variants (`type: session` with whitespace, older
+      versions). Header, usage, and id lookups accept common variants.
+- [x] Add a `SessionSource` protocol so future harnesses are adapters rather
       than edits to `mix.py`/`cli.py`.
-- [ ] Add malformed/truncated JSONL fixture tests.
-- [ ] Add a fixture for duplicate IDs across files.
+- [x] Add malformed/truncated JSONL fixture tests.
+- [x] Add a fixture for duplicate IDs across files.
 
 Acceptance: no crash on partially written session files; all skipped lines are
 intentional and test-covered.
 
 ### 3.4 Output and UX
 
-- [ ] Add `--quiet`/`--verbose` and consistent stderr diagnostics.
-- [ ] Avoid recomputing `accumulate(group)` multiple times in JSON groups.
-- [ ] Add a compact `--format table|json|tsv` if real workflows need TSV.
-- [ ] Document every filter with examples in `README.md`.
+- [x] Add `--quiet`/`--verbose` and consistent stderr diagnostics.
+- [x] Avoid recomputing `accumulate(group)` multiple times in JSON groups.
+- [x] Add a compact `--format table|json|tsv`.
+- [x] Document every filter with examples in `README.md`.
+
+Implementation notes:
+
+- `--last-sessions` is applied before the time window; an explicit `--since`
+  wins over a relative window.
+- `--cost-model` ranks endpoints with the configured `[rank]` filters and emits
+  both overall and per-group `estimated_cost_usd`. It is opt-in because it is
+  the only network call in `measure`.
+- `--format tsv` writes a stable header plus `overall`, `group`, and
+  `top-project` rows. Result data goes to stdout; tips/warnings/verbose
+  diagnostics go to stderr.
+- `SessionSource` is a protocol with `PiSessionSource` as the only adapter;
+  moving pi parsing into `sources/pi.py` remains Phase 7 work.
 
 ## 9. Phase 4 — Daily refresh workflow (next major phase)
 

@@ -22,6 +22,7 @@ pi_agent_dir = "~/agent"
 
 [measure]
 days = 7
+anchor = "now"
 projects = ["~/code"]
 models = ["@preset/main"]
 
@@ -53,6 +54,7 @@ pi_model_id = "@preset/main"
     cfg = load_config(config)
     assert cfg.loaded is True
     assert cfg.measure.days == 7
+    assert cfg.measure.anchor == "now"
     assert cfg.measure.projects == ("~/code",)
     assert cfg.measure.models == ("@preset/main",)
     assert cfg.rank.top == 3
@@ -85,6 +87,9 @@ def test_invalid_toml_and_values(tmp_path) -> None:
     config.write_text('[rank]\nhealthy_only = "yes"\n', encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(config)
+    config.write_text('[measure]\nanchor = "yesterday"\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(config)
 
 
 def test_template_is_valid_toml(tmp_path) -> None:
@@ -93,3 +98,4 @@ def test_template_is_valid_toml(tmp_path) -> None:
     cfg = load_config(config)
     assert cfg.loaded is True
     assert cfg.rank.top == 4
+    assert cfg.measure.anchor == "latest"

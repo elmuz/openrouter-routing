@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -144,3 +145,111 @@ tps_pct = "p75"
     assert args.tps_pct == "p75"
     assert args.require_cache is False
     assert args.max_price_from == 0
+
+
+def test_measure_last_sessions(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    assert cli.main(["measure", "--json", "--last-sessions", "1", *session_paths]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["requests"] == 3
+    assert payload["window"]["last_sessions"] == 1
+
+
+def test_measure_anchor_now_uses_wall_clock(tmp_path, monkeypatch, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    now = datetime.now(UTC)
+    path = tmp_path / "--tmp-anchor--" / "s.jsonl"
+    path.parent.mkdir()
+    lines = ['{"type":"session","id":"s","cwd":"/tmp/anchor"}']
+    for message_id, when in (("old", now - timedelta(hours=3)), ("new", now - timedelta(hours=1))):
+        lines.append(
+            json.dumps(
+                {
+                    "type": "message",
+                    "id": message_id,
+                    "timestamp": when.isoformat(),
+                    "message": {
+                        "provider": "openrouter",
+                        "model": "m",
+                        "usage": {"input": 1, "cacheRead": 9, "output": 1, "cacheWrite": 0},
+                    },
+                }
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert cli.main(["measure", "--json", "--anchor", "now", "--hours", "1.5", str(path)]) == 0
+    assert json.loads(capsys.readouterr().out)["requests"] == 1
+    assert cli.main(["measure", "--json", "--anchor", "latest", "--hours", "3", str(path)]) == 0
+    assert json.loads(capsys.readouterr().out)["requests"] == 2
+
+
+def test_measure_provider_and_exclude_project(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    assert cli.main(["measure", "--json", "--provider", "openrouter", *session_paths]) == 0
+    assert json.loads(capsys.readouterr().out)["requests"] == 6
+
+    assert cli.main(["measure", "--json", "--provider", "nope", *session_paths]) == 1
+    assert "no usage records" in capsys.readouterr().err
+
+    assert (
+        cli.main(["measure", "--json", "--exclude-project", "/home/alice/projects/alpha", *session_paths])
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["requests"] == 3
+    assert payload["filters"]["exclude_projects"] == ["/home/alice/projects/alpha"]
+
+
+def test_measure_top_projects_and_root_validation(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    assert cli.main(["measure", "--json", "--top-projects", "1", *session_paths]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload["top_projects"]) == 1
+    assert payload["top_projects"][0]["name"] == "/home/alice/projects/alpha"
+    assert payload["top_projects"][0]["total_input"] == 1150
+
+    assert cli.main(["measure", "--json", "--project", "/", *session_paths]) == 1
+    assert "filesystem root" in capsys.readouterr().err
+
+
+def test_measure_tsv_quiet_and_verbose(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    assert cli.main(["measure", "--format", "tsv", "--by", "project", *session_paths]) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[0].startswith("scope\tkey\tname")
+    assert "overall\t\tall" in out
+    assert "group\tproject\t/home/alice/projects/alpha" in out
+
+    assert cli.main(["measure", "--quiet", *session_paths]) == 0
+    assert "tip:" not in capsys.readouterr().err
+
+    assert cli.main(["measure", "--json", "--verbose", *session_paths]) == 0
+    assert "config" in capsys.readouterr().err
+
+
+def test_measure_groups_are_deterministic(alpha_path, monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    assert cli.main(["measure", "--json", "--by", "model", alpha_path]) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert list(first["groups"]["model"]) == ["@preset/main", "@preset/other"]
+    assert cli.main(["measure", "--json", "--by", "model", alpha_path]) == 0
+    assert json.loads(capsys.readouterr().out) == first
+
+
+def test_measure_text_prints_resolved_window(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    assert cli.main(["measure", "--since", "2026-01-01T10:00:02.000Z", *session_paths]) == 0
+    out = capsys.readouterr().out
+    assert "2026-01-01 10:00:02" in out
+    assert "explicit bounds (inclusive)" in out
+
+
+def test_measure_cost_model(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "OpenRouterClient", FakeClient)
+    assert cli.main(["measure", "--json", "--cost-model", "vendor/model", *session_paths]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["cost_model"]["endpoint"] == "a/fp8"
+    assert payload["estimated_cost_usd"] > 0
+    assert all(group["estimated_cost_usd"] > 0 for group in payload["groups"]["provider-model"].values())
