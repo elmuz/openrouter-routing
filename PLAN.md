@@ -285,7 +285,7 @@ intentional and test-covered.
 - [x] Add `--quiet`/`--verbose` and consistent stderr diagnostics.
 - [x] Avoid recomputing `accumulate(group)` multiple times in JSON groups.
 - [x] Add a compact `--format table|json|tsv`.
-- [x] Document every filter with examples in `README.md`.
+- [x] Document every filter with examples in `docs/measure.md`.
 
 Implementation notes:
 
@@ -480,7 +480,8 @@ Definition of done for a phase:
 2. `uv run pytest`, `uv run ruff check .`, and
    `uv run ruff format --check .` pass.
 3. CI is green.
-4. README/AGENTS/PLAN are updated if behavior or assumptions changed.
+4. README/docs, AGENTS, and PLAN are updated if behavior or assumptions
+   changed.
 5. No new runtime dependency unless explicitly justified.
 6. No implicit state mutation or systemd enablement.
 

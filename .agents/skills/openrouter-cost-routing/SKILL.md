@@ -5,8 +5,9 @@ description: Use when editing OpenRouter pricing, provider routing, prompt-cache
 
 # OpenRouter cost routing
 
-Read `README.md` and `AGENTS.md` first. This skill exists to keep pricing and
-routing assumptions anchored to current OpenRouter behavior instead of memory.
+Read `AGENTS.md` and `docs/how-it-works.md` first. This skill exists to keep
+pricing and routing assumptions anchored to current OpenRouter behavior instead
+of memory.
 
 ## Before changing pricing or routing
 

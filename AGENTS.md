@@ -13,7 +13,7 @@ C_eff = (1-f)*p_in + f*p_cr + R*p_out + fw*p_cw
 ```
 
 Do not replace this with OpenRouter's `sort: price`; that ignores cache-read
-pricing, which dominates agentic workloads. See `README.md` and
+pricing, which dominates agentic workloads. See `docs/how-it-works.md` and
 `.agents/skills/openrouter-cost-routing/references/openrouter-billing.md`.
 
 ## Layout
@@ -21,6 +21,8 @@ pricing, which dominates agentic workloads. See `README.md` and
 - `src/openrouter_routing/` — importable package.
 - `measure.py`, `cheapest.py`, `preset.py` — compatibility wrappers only.
 - `tests/` — pytest suite. Network is mocked/injected; keep it that way.
+- `docs/` — user documentation; `README.md` stays a short overview.
+- `docs/assets/` — images referenced by the documentation.
 - `examples/mix.json` — sample output, not a runtime input.
 - `systemd/` — reserved for the **opt-in** automation phase; nothing is
   installed or enabled by default.
@@ -59,7 +61,10 @@ uv run openrouter-routing preset plan ds4-flash --mix examples/mix.json
 9. **Never commit secrets.** `OPENROUTER_API_KEY` and `~/.pi/agent/auth.json`
    are runtime inputs only.
 10. **Document formula changes.** If you touch pricing semantics, update
-    `README.md`, the skill reference, and tests in the same change.
+    `docs/how-it-works.md` (and the `README.md` summary if it changes), the
+    skill reference, and tests in the same change.
+11. **Keep the README short.** Detailed usage belongs in `docs/`; link it from
+    the README instead of growing the README.
 
 ## Auth
 
