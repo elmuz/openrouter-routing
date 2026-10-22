@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install
+        run: uv sync --locked
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+      - name: Lint
+        run: uv run ruff check .
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+      - name: Test
+        run: uv run pytest
+        env:
+          UV_PYTHON: ${{ matrix.python }}

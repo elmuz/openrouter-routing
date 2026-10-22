@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"alpha-session","timestamp":"2026-01-01T10:00:00.000Z","cwd":"/home/alice/projects/alpha"}
+{"type":"message","id":"a1","timestamp":"2026-01-01T10:00:01.000Z","message":{"role":"assistant","provider":"openrouter","model":"@preset/main","responseModel":"vendor/model-a","usage":{"input":100,"output":10,"cacheRead":900,"cacheWrite":0,"totalTokens":1010}}}
+{"type":"message","id":"a1","timestamp":"2026-01-01T10:00:01.000Z","message":{"role":"assistant","provider":"openrouter","model":"@preset/main","responseModel":"vendor/model-a","usage":{"input":100,"output":10,"cacheRead":900,"cacheWrite":0,"totalTokens":1010}}}
+{"type":"message","id":"a2","timestamp":"2026-01-01T10:00:02.000Z","message":{"role":"assistant","provider":"openrouter","model":"@preset/main","responseModel":"vendor/model-a","usage":{"input":20,"output":5,"cacheRead":80,"cacheWrite":0,"totalTokens":105}}}
+{"type":"message","id":"a3","timestamp":"2026-01-01T10:00:03.000Z","message":{"role":"assistant","provider":"openrouter","model":"@preset/other","responseModel":"vendor/model-b","usage":{"input":50,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":55}}}

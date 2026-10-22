@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"beta-session","timestamp":"2026-01-02T12:00:00.000Z","cwd":"/home/alice/projects/beta"}
+{"type":"message","id":"b1","timestamp":"2026-01-02T12:00:01.000Z","message":{"role":"assistant","provider":"openrouter","model":"@preset/other","responseModel":"vendor/model-b","usage":{"input":50,"output":5,"cacheRead":50,"cacheWrite":5,"totalTokens":105}}}
+{"type":"message","id":"b2","timestamp":"2026-01-02T12:00:02.000Z","message":{"role":"assistant","provider":"openrouter","model":"@preset/other","responseModel":"vendor/model-b","usage":{"input":10,"output":2,"cacheRead":90,"cacheWrite":0,"totalTokens":102}}}
+{"type":"message","id":"b3","timestamp":"2026-01-02T12:00:03.000Z","message":{"role":"assistant","provider":"openrouter","model":"@preset/other","usage":{"input":10,"output":2,"cacheRead":90,"cacheWrite":0}}}
