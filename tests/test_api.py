@@ -70,3 +70,26 @@ def test_http_error_is_wrapped() -> None:
     client = OpenRouterClient(key="", opener=opener)
     with pytest.raises(OpenRouterError, match="HTTP 404"):
         client.get_json("/models/x/endpoints")
+
+
+def test_fetch_generation_requires_and_returns_data() -> None:
+    client = OpenRouterClient(
+        key="secret",
+        opener=opener_for({"/generation?id=gen-1": {"data": {"id": "gen-1", "total_cost": 0.5}}}),
+    )
+    generation = client.fetch_generation("gen-1")
+    assert generation["id"] == "gen-1"
+    assert generation["total_cost"] == 0.5
+
+
+def test_fetch_generation_404_is_not_found() -> None:
+    import urllib.error
+
+    from openrouter_routing.errors import OpenRouterNotFound
+
+    def opener(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b'{"error":"gone"}'))
+
+    client = OpenRouterClient(key="secret", opener=opener)
+    with pytest.raises(OpenRouterNotFound, match="HTTP 404"):
+        client.fetch_generation("gen-gone")

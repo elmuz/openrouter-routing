@@ -32,6 +32,7 @@ def _provider_filter(
     max_ttft: float | None,
     tps_pct: str,
     ttft_pct: str,
+    hard_perf: bool = True,
 ) -> list[EndpointScore]:
     rows = [row for row in rows if row.slug and row.status == 0]
     if ignored:
@@ -40,9 +41,9 @@ def _provider_filter(
         rows = [row for row in rows if row.quant in quant_ok]
     if require_cache:
         rows = [row for row in rows if row.cached]
-    if min_tps is not None:
+    if hard_perf and min_tps is not None:
         rows = [row for row in rows if (pct_stat(row.tps, tps_pct) or 0) >= min_tps]
-    if max_ttft is not None:
+    if hard_perf and max_ttft is not None:
         rows = [row for row in rows if (pct_stat(row.ttft, ttft_pct) or float("inf")) <= max_ttft * 1000]
     return rows
 
@@ -71,6 +72,10 @@ def new_config(
     if options.allow_fallbacks is not None:
         prov["allow_fallbacks"] = options.allow_fallbacks
 
+    mode = getattr(options, "routing_mode", None) or "order"
+    if mode not in {"order", "preferred"}:
+        raise PlanError(f"unknown routing mode: {mode}")
+
     f = float(mix.get("f", 0.0))
     r = float(mix.get("R", 0.0))
     fw = float(mix.get("fw", 0.0))
@@ -85,6 +90,8 @@ def new_config(
         max_ttft=options.max_ttft,
         tps_pct=options.tps_pct,
         ttft_pct=options.ttft_pct,
+        # In preferred mode throughput/latency become soft preferred_* floors.
+        hard_perf=mode == "order",
     )
     if not rows:
         raise PlanError(
@@ -93,15 +100,30 @@ def new_config(
             f"quantizations={sorted(prov.get('quantizations') or [])})"
         )
 
-    if options.prefer:
+    rows.sort(key=lambda row: row.cost)
+    all_rows = rows
+    if mode == "preferred":
+        # Keep OpenRouter's sticky cache routing: no manual order, sort by the
+        # plain prompt/completion price, and use soft preferred_* floors.
+        prov.pop("order", None)
+        current_sort = prov.get("sort")
+        partition = current_sort.get("partition") if isinstance(current_sort, dict) else None
+        prov["sort"] = {"by": "price", "partition": partition}
         if options.min_tps is not None:
             prov["preferred_min_throughput"] = {options.tps_pct: options.min_tps}
         if options.max_ttft is not None:
             prov["preferred_max_latency"] = {options.ttft_pct: options.max_ttft}
+    else:
+        if options.prefer:
+            if options.min_tps is not None:
+                prov["preferred_min_throughput"] = {options.tps_pct: options.min_tps}
+            if options.max_ttft is not None:
+                prov["preferred_max_latency"] = {options.ttft_pct: options.max_ttft}
+        if options.top:
+            rows = rows[: options.top]
+        prov["order"] = [row.slug for row in rows]
+        if getattr(options, "keep_all_rows", False):
+            rows = all_rows
 
-    rows.sort(key=lambda row: row.cost)
-    if options.top:
-        rows = rows[: options.top]
-    prov["order"] = [row.slug for row in rows]
     cfg["model"] = model
     return cfg, rows, resolved

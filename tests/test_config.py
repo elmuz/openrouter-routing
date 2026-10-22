@@ -69,6 +69,70 @@ pi_model_id = "@preset/main"
     assert cfg.to_dict()["targets"][0]["name"] == "main"
 
 
+def test_refresh_and_target_filters(tmp_path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        """
+[refresh]
+ hours = 12
+ anchor = "now"
+ routing_mode = "preferred"
+ lock_timeout = 2.5
+ log_file = "refresh.log"
+
+[[target]]
+name = "local"
+kind = "pi-model"
+pi_model_id = "@preset/main"
+pi_provider = "openrouter"
+routing_mode = "order"
+models = ["@preset/main"]
+routed_models = ["vendor/*"]
+exclude_models = [":free"]
+projects = ["~/code"]
+exclude_projects = ["~/code/scratch"]
+""",
+        encoding="utf-8",
+    )
+    cfg = load_config(config)
+    assert cfg.refresh.hours == 12
+    assert cfg.refresh.days is None
+    assert cfg.refresh.anchor == "now"
+    assert cfg.refresh.routing_mode == "preferred"
+    assert cfg.refresh.lock_timeout == 2.5
+    assert cfg.refresh.log_file == (tmp_path / "refresh.log").resolve()
+    target = cfg.targets[0]
+    assert target.routing_mode == "order"
+    assert target.models == ("@preset/main",)
+    assert target.routed_models == ("vendor/*",)
+    assert target.exclude_models == (":free",)
+    assert target.projects == ("~/code",)
+    assert target.exclude_projects == ("~/code/scratch",)
+    assert cfg.to_dict()["refresh"]["routing_mode"] == "preferred"
+    assert cfg.to_dict()["targets"][0]["models"] == ["@preset/main"]
+
+
+def test_refresh_defaults_and_validation(tmp_path) -> None:
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.refresh.days == 7
+    assert cfg.refresh.anchor == "now"
+    assert cfg.refresh.routing_mode == "order"
+
+    config = tmp_path / "config.toml"
+    config.write_text('[refresh]\nrouting_mode = "sticky"\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(config)
+    config.write_text("[refresh]\nlock_timeout = -1\n", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(config)
+    config.write_text('[[target]]\nrouting_mode = "nope"\n', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_config(config)
+    config.write_text('[[target]]\nname = "same"\n[[target]]\nname = "same"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="duplicate"):
+        load_config(config)
+
+
 def test_relative_paths_are_relative_to_config(tmp_path) -> None:
     config = tmp_path / "config.toml"
     config.write_text('[paths]\npi_agent_dir = "agent"\n', encoding="utf-8")
@@ -99,3 +163,5 @@ def test_template_is_valid_toml(tmp_path) -> None:
     assert cfg.loaded is True
     assert cfg.rank.top == 4
     assert cfg.measure.anchor == "latest"
+    assert cfg.refresh.days == 7
+    assert cfg.refresh.anchor == "now"

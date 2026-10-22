@@ -52,6 +52,7 @@ def options(**overrides) -> Namespace:
         "ttft_pct": "p90",
         "prefer": False,
         "top": None,
+        "routing_mode": "order",
     }
     base.update(overrides)
     return Namespace(**base)
@@ -121,6 +122,52 @@ def test_new_config_applies_overrides_and_preferences() -> None:
     assert cfg["provider"]["allow_fallbacks"] is False
     assert cfg["provider"]["preferred_min_throughput"] == {"p90": 40}
     assert cfg["provider"]["preferred_max_latency"] == {"p90": 6}
+
+
+def test_new_config_preferred_mode_keeps_soft_floors_and_sticky_routing() -> None:
+    current = {
+        "model": "vendor/model-1",
+        "provider": {"order": ["old"], "sort": {"by": "throughput", "partition": "none"}},
+    }
+    client = FakeClient(
+        {
+            "vendor/model-1": [
+                endpoint("good/fp8", "0.000001", "0.000002", "0.0000001"),
+                endpoint("slow/fp8", "0.0000001", "0.0000002", "0.00000001", tps=5),
+            ]
+        },
+        [],
+    )
+    cfg, rows, _ = new_config(
+        current,
+        {"f": 0.9, "R": 0.01, "fw": 0.0},
+        options(
+            routing_mode="preferred",
+            min_tps=40,
+            max_ttft=6,
+            top=1,
+            prefer=False,
+        ),
+        client,
+    )
+    provider = cfg["provider"]
+    assert "order" not in provider
+    assert provider["sort"] == {"by": "price", "partition": "none"}
+    assert provider["preferred_min_throughput"] == {"p90": 40}
+    assert provider["preferred_max_latency"] == {"p90": 6}
+    # Throughput/latency are soft in preferred mode, so the slow endpoint survives.
+    assert {row.slug for row in rows} == {"good/fp8", "slow/fp8"}
+
+
+def test_new_config_rejects_unknown_mode() -> None:
+    client = FakeClient({"vendor/model-1": [endpoint("a/fp8", "0.000001", "0.000002", "0.0000001")]}, [])
+    with pytest.raises(PlanError, match="unknown routing mode"):
+        new_config(
+            {"model": "vendor/model-1", "provider": {}},
+            {},
+            options(routing_mode="sticky"),
+            client,
+        )
 
 
 def test_new_config_raises_when_nothing_is_left() -> None:

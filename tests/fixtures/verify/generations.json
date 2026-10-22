@@ -1,0 +1,44 @@
+{
+  "gen-ok": {
+    "id": "gen-ok",
+    "model": "vendor/model",
+    "provider_name": "A",
+    "tokens_prompt": 1000,
+    "tokens_completion": 10,
+    "native_tokens_prompt": 1000,
+    "native_tokens_completion": 10,
+    "native_tokens_cached": 900,
+    "cache_discount": 0.00009,
+    "total_cost": 0.00021,
+    "upstream_inference_cost": null,
+    "is_byok": false
+  },
+  "gen-mismatch": {
+    "id": "gen-mismatch",
+    "model": "vendor/model",
+    "provider_name": "B",
+    "tokens_prompt": 1000,
+    "tokens_completion": 20,
+    "native_tokens_prompt": 1000,
+    "native_tokens_completion": 20,
+    "native_tokens_cached": 0,
+    "cache_discount": 0,
+    "total_cost": 0.0004,
+    "upstream_inference_cost": null,
+    "is_byok": false
+  },
+  "gen-unmatched": {
+    "id": "gen-unmatched",
+    "model": "vendor/model",
+    "provider_name": "Unknown",
+    "tokens_prompt": 10,
+    "tokens_completion": 1,
+    "native_tokens_prompt": 10,
+    "native_tokens_completion": 1,
+    "native_tokens_cached": 0,
+    "cache_discount": 0,
+    "total_cost": 0.00001,
+    "upstream_inference_cost": null,
+    "is_byok": false
+  }
+}

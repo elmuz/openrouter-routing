@@ -1,0 +1,13 @@
+# Managed by `openrouter-routing install-systemd`.
+# Reinstall with --force to overwrite local edits.
+[Unit]
+Description=Refresh OpenRouter provider routing from recent pi sessions
+Documentation=https://github.com/elmuz/openrouter-routing
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@EXEC_START@
+StandardOutput=journal
+StandardError=journal

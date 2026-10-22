@@ -139,3 +139,19 @@ def test_unreadable_session_file_is_a_config_error(tmp_path) -> None:
 
     with pytest.raises(ConfigError, match="cannot read session file"):
         load_records([tmp_path / "missing.jsonl"])
+
+
+def test_response_id_variants(tmp_path) -> None:
+    path = tmp_path / "response-ids.jsonl"
+    path.write_text(
+        '{"type":"session","id":"s","cwd":"/tmp/ids"}\n'
+        '{"type":"message","id":"m1","message":{"provider":"openrouter","model":"m",'
+        '"responseId":"gen-1","usage":{"input":1,"cacheRead":1,"output":1,"cacheWrite":0}}}\n'
+        '{"type":"message","id":"m2","message":{"provider":"openrouter","model":"m",'
+        '"response_id":"gen-2","usage":{"input":1,"cacheRead":1,"output":1,"cacheWrite":0}}}\n'
+        '{"type":"message","id":"m3","responseId":"gen-3","message":{"provider":"openrouter","model":"m",'
+        '"usage":{"input":1,"cacheRead":1,"output":1,"cacheWrite":0}}}\n',
+        encoding="utf-8",
+    )
+    records = load_records([path])
+    assert [record.response_id for record in records] == ["gen-1", "gen-2", "gen-3"]

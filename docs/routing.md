@@ -55,12 +55,36 @@ key the stats are null and the filters cannot be applied.
   prompt/completion prices, so size it from a later endpoint with
   `--max-price-from`.
 - `preferred_*` is a soft preference: endpoints that miss it are demoted, not
-  dropped. `--min-tps` / `--max-ttft` are hard filters in this tool.
+  dropped. `--min-tps` / `--max-ttft` are hard filters in `cheapest` and in
+  `order` mode.
 - OpenRouter's provider **sticky routing is disabled when `provider.order` is
-  set**. The order still keeps you on the chosen endpoint; the tradeoff is worth
-  documenting per preset and may become a selectable routing mode later.
+  set**. `refresh` warns about this and supports an alternative
+  `routing_mode = "preferred"`: no order, `sort: price`, hard
+  `ignore`/`quantizations`, and soft `preferred_*` floors. See
+  [Refresh](refresh.md).
+- `refresh --compare` estimates the measured window under both modes. Its
+  preferred estimate approximates `sort: price` by minimizing uncached input
+  plus output price, because OpenRouter's exact sort tie-breaking is not public.
+
+## Comparing with the current preset
+
+`--compare-current` reads a preset's current `provider.order` and compares its
+first still-available endpoint with the proposed best endpoint:
+
+```bash
+openrouter-routing cheapest --preset ds4-flash --mix mix.json --compare-current
+openrouter-routing cheapest --preset ds4-flash --mix mix.json --compare-current --json
+```
+
+The positional model is optional with `--preset`; the preset's model is used.
+The comparison reports each endpoint's `C_eff` and the cost of the token counts
+in the mix. Use a mix built with `measure --days 7` for a seven-day estimate.
+`--compare-current` is read-only and cannot be combined with `--order` or
+`--provider-json`.
 
 ## Storing the result
 
 `provider.order` can be pinned in an OpenRouter preset (see
-[Presets](presets.md)) or, in a later phase, in a local pi `models.json`.
+[Presets](presets.md)) or in a local pi `models.json`
+(`compat.openRouterRouting`) through a `refresh` `pi-model` target. See
+[Refresh](refresh.md).

@@ -70,9 +70,13 @@ Sources:
 GET https://openrouter.ai/api/v1/generation?id=<generation_id>
 ```
 
-Fields used for verification: `provider_name`, `tokens_prompt`,
-`tokens_completion`, `native_tokens_cached`, `cache_discount`, `total_cost`,
-`upstream_inference_cost`.
+Fields used for verification: `provider_name`, `model`, `tokens_prompt`,
+`tokens_completion`, `native_tokens_prompt`, `native_tokens_completion`,
+`native_tokens_cached`, `cache_discount`, `total_cost`,
+`upstream_inference_cost`, `is_byok`. The generation endpoint does not expose a
+cache-write token field; `verify` reports cache writes from the pi session and
+flags an endpoint without a cache-write price. A `404` means the record is
+missing or expired and must not abort a whole verification run.
 
 Source: https://openrouter.ai/docs/api-reference/get-a-generation
 

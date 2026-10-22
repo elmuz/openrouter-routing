@@ -1,0 +1,30 @@
+{
+  "endpoints": [
+    {
+      "tag": "a/fp8",
+      "provider_name": "A",
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000002",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.00000025"
+      },
+      "quantization": "fp8",
+      "context_length": 100000,
+      "status": 0
+    },
+    {
+      "tag": "b/fp8",
+      "provider_name": "B",
+      "pricing": {
+        "prompt": "0.000001",
+        "completion": "0.000002",
+        "input_cache_read": "0.0000001",
+        "input_cache_write": "0.00000025"
+      },
+      "quantization": "fp8",
+      "context_length": 100000,
+      "status": 0
+    }
+  ]
+}

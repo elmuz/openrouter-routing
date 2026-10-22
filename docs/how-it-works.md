@@ -57,7 +57,9 @@ time filters — see [Measure](measure.md).
 - Cached-token counts depend on pi/provider reporting. Cache TTL, minimum
   cacheable prompt size, truncation, and cache-write pricing can make the
   realized cost differ from the model; validate against
-  `GET /api/v1/generation?id=<responseId>` when in doubt.
+  `GET /api/v1/generation?id=<responseId>` when in doubt. The
+  [`verify`](verify.md) command automates that comparison and reports the likely
+  cause of a divergence.
 - `max_price` has no cache field in OpenRouter's API; that is why the optimal
   cache-aware routing has to be computed offline and expressed as `order`.
 - The project targets OpenRouter. The session loader is isolated so another

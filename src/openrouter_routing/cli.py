@@ -4,13 +4,17 @@ import argparse
 import json
 import sys
 from argparse import Namespace
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, automation
 from .api import OpenRouterClient, resolve_model
 from .config import AppConfig, config_template, load_config
+from .doctor import failed as doctor_failed
+from .doctor import format_check, run_doctor
 from .errors import AppError, ConfigError, PlanError
 from .mix import (
     TimeWindow,
@@ -35,8 +39,11 @@ from .pricing import (
     pct_stat,
     score_endpoint,
 )
-from .routing import emittable, provider_block, rank
+from .refresh import RefreshResult, run_refresh
+from .routing import compare_current, compare_modes, emittable, provider_block, rank
 from .sessions import PiSessionSource
+from .targets import TargetPlan
+from .verify import DEFAULT_LAST, DEFAULT_TOLERANCE, VerifyResult, verify_generations
 
 _QUIET = False
 _VERBOSE = False
@@ -175,6 +182,19 @@ def _window_label(window: TimeWindow) -> str:
     if window.since is not None or window.until is not None:
         return "explicit bounds (inclusive)"
     return "all records"
+
+
+def _comparison_mix(mix: dict[str, Any], f: float, r: float, fw: float) -> dict[str, int]:
+    """Use the saved counters, or synthesize 1M input tokens from f/R/fw."""
+    counters = {key: int(mix.get(key) or 0) for key in ("input", "cacheRead", "cacheWrite", "output")}
+    if any(counters.values()):
+        return counters
+    return {
+        "input": max(0, round((1 - f) * 1_000_000)),
+        "cacheRead": max(0, round(f * 1_000_000)),
+        "cacheWrite": max(0, round(fw * 1_000_000)),
+        "output": max(0, round(r * 1_000_000)),
+    }
 
 
 def _mix_payload(mix: dict[str, Any], endpoint: EndpointScore | None) -> dict[str, Any]:
@@ -445,7 +465,36 @@ def cmd_measure(args: Namespace) -> int:
     return 0
 
 
+def _print_current_comparison(preset: str, comparison: dict[str, Any]) -> None:
+    current = comparison.get("current")
+    proposed = comparison.get("proposed") or {}
+    order = comparison.get("current_order") or []
+    print(f"preset {preset} current order: {_order_text(order)}")
+    if current is None:
+        print("  current  : (no ordered endpoint still exists in the endpoint list)")
+    else:
+        print(
+            f"  current  : {current['endpoint'][:32]:32} "
+            f"C_eff={current['c_eff']:.6f}  mix cost=${current['estimated_cost_usd']:.6f}"
+        )
+    print(
+        f"  proposed : {proposed.get('endpoint', '?')[:32]:32} "
+        f"C_eff={proposed.get('c_eff', 0.0):.6f}  mix cost=${proposed.get('estimated_cost_usd', 0.0):.6f}"
+    )
+    if comparison.get("delta_pct") is not None:
+        print(
+            f"  change   : ${comparison['delta_usd']:+.6f} "
+            f"({comparison['delta_pct']:+.2f}% versus the current order)"
+        )
+    print("  (mix cost uses the token counts in the mix; use measure --days 7 for a 7-day estimate)")
+    print()
+
+
 def cmd_cheapest(args: Namespace) -> int:
+    if args.compare_current and not args.preset:
+        raise ConfigError("--compare-current requires --preset SLUG")
+    if args.compare_current and (args.order or args.provider_json):
+        raise ConfigError("--compare-current cannot be combined with --order or --provider-json")
     cfg = load_config(args.config)
     _rank_defaults(args, cfg)
     f, r, fw = DEFAULT_F, DEFAULT_R, DEFAULT_FW
@@ -458,6 +507,16 @@ def cmd_cheapest(args: Namespace) -> int:
     fw = args.fw if args.fw is not None else fw
 
     client = OpenRouterClient()
+    preset_config: dict[str, Any] | None = None
+    if args.preset:
+        preset = client.get_preset(args.preset)
+        designated = preset.get("designated_version") or {}
+        preset_config = designated.get("config") or {}
+        if not args.model:
+            args.model = model_of(preset_config)
+    if not args.model:
+        raise ConfigError("cheapest needs a model, or --preset SLUG to use the preset's model")
+
     resolved, endpoints = resolve_model(args.model, client)
     if resolved != args.model:
         tip(f"// {args.model} is an alias -> resolving endpoints of {resolved}")
@@ -477,20 +536,26 @@ def cmd_cheapest(args: Namespace) -> int:
     result = rank(rows, **_rank_filters(args))
     ranked = result.rows
     best = result.best
+    comparison = None
+    if args.compare_current:
+        current_order = cfg_provider(preset_config or {}).get("order") or []
+        comparison = compare_current(rows, current_order, _comparison_mix(mix, f, r, fw), proposed=best)
 
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "model": args.model,
-                    "mix": {"f": f, "R": r, "fw": fw},
-                    "cheapest": best.slug,
-                    "ranking": [row.as_dict() for row in ranked],
-                },
-                indent=2,
-            )
-        )
+        payload: dict[str, Any] = {
+            "model": args.model,
+            "mix": {"f": f, "R": r, "fw": fw},
+            "cheapest": best.slug,
+            "ranking": [row.as_dict() for row in ranked],
+        }
+        if comparison is not None:
+            payload["preset"] = args.preset
+            payload["comparison"] = comparison
+        print(json.dumps(payload, indent=2))
         return 0
+
+    if comparison is not None:
+        _print_current_comparison(args.preset or "?", comparison)
 
     if args.order or args.provider_json:
         safe, dropped = emittable(ranked)
@@ -607,9 +672,13 @@ def cmd_preset_show(args: Namespace) -> int:
 
 def _preset_plan_options(args: Namespace, cfg: AppConfig) -> None:
     _rank_defaults(args, cfg)
+    if getattr(args, "routing_mode", None) is None:
+        args.routing_mode = "order"
 
 
 def cmd_preset_plan(args: Namespace) -> int:
+    if getattr(args, "dry_run", False):
+        args.apply = False
     cfg = load_config(args.config)
     _preset_plan_options(args, cfg)
     client = _preset_client()
@@ -620,7 +689,8 @@ def cmd_preset_plan(args: Namespace) -> int:
     created, rows, resolved = new_config(current, mix, args, client)
 
     old = cfg_provider(current).get("order") or []
-    new = cfg_provider(created)["order"]
+    new = cfg_provider(created).get("order") or []
+    changed = created != current
     print(f"preset {args.slug} v{designated.get('version')} -> v{(designated.get('version') or 0) + 1}")
     if resolved != (args.model or model_of(current)):
         print(f"  model {model_of(current)} is an alias -> resolving endpoints of {resolved}")
@@ -639,7 +709,9 @@ def cmd_preset_plan(args: Namespace) -> int:
     for slug in old:
         if slug not in new:
             print(f"     dropped {slug} (no longer healthy / filtered out)")
-    if old == new:
+    if old == new and changed:
+        print("\n  order unchanged; other routing/config fields changed")
+    elif old == new:
         print("\n  order unchanged")
     print("\n  config to persist:")
     print(json.dumps(created, indent=2))
@@ -647,8 +719,8 @@ def cmd_preset_plan(args: Namespace) -> int:
     if not args.apply:
         print(f"\ndry run. re-run with --apply to POST a v{(designated.get('version') or 0) + 1}")
         return 0
-    if old == new and not args.force:
-        print("\norder unchanged; not creating a new preset version (use --force to override)")
+    if not changed and not args.force:
+        print("\nconfig unchanged; not creating a new preset version (use --force to override)")
         return 0
     if designated.get("system_prompt"):
         print(
@@ -663,6 +735,8 @@ def cmd_preset_plan(args: Namespace) -> int:
 
 
 def cmd_preset_rollback(args: Namespace) -> int:
+    if getattr(args, "dry_run", False):
+        args.apply = False
     client = _preset_client()
     versions = {version["version"]: version for version in client.get_versions(args.slug)}
     if args.version not in versions:
@@ -696,10 +770,340 @@ def cmd_config_init(args: Namespace) -> int:
     path = Path(args.config).expanduser() if args.config else default_config_path()
     if path.exists() and not args.force:
         raise ConfigError(f"{path} already exists; use --force to overwrite")
+    if getattr(args, "dry_run", False):
+        print(f"dry run: would write {path}")
+        return 0
     ensure_dir(path.parent)
     path.write_text(config_template(), encoding="utf-8")
     print(f"wrote {path}")
     return 0
+
+
+@contextmanager
+def _optional_log(path: Path | None) -> Iterator[Callable[[str], None]]:
+    if path is None:
+        yield lambda message: None
+        return
+    ensure_dir(path.parent)
+    with path.open("a", encoding="utf-8") as handle:
+
+        def write(message: str) -> None:
+            stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+            handle.write(f"{stamp} {message}\n")
+            handle.flush()
+
+        yield write
+
+
+def _order_text(order: Sequence[str]) -> str:
+    return ", ".join(order) if order else "(none)"
+
+
+def _print_refresh_plans(plans: Sequence[TargetPlan], compare: bool) -> None:
+    order_mode = False
+    for plan in plans:
+        order_mode = order_mode or plan.mode == "order"
+        print(f"target {plan.target.name}  ({plan.target.kind}, routing_mode={plan.mode})")
+        resolved = f" -> {plan.resolved_model}" if plan.resolved_model != plan.model else ""
+        print(f"  model    : {plan.model}{resolved}")
+        mix = plan.mix
+        print(f"  mix      : requests={mix['requests']} f={mix['f']:.4f} R={mix['R']:.5f} fw={mix['fw']:.5f}")
+        print(f"  old order: {_order_text(plan.current_order)}")
+        if plan.mode == "preferred":
+            print("  new order: (none; preferred mode keeps sticky routing)")
+            print(
+                f"  proposed : sort={plan.proposed_routing.get('sort')} "
+                f"ignore={plan.proposed_routing.get('ignore') or []} "
+                f"preferred_min_throughput={plan.proposed_routing.get('preferred_min_throughput')} "
+                f"preferred_max_latency={plan.proposed_routing.get('preferred_max_latency')}"
+            )
+        else:
+            print(f"  new order: {_order_text(plan.proposed_order)}")
+            old, new = set(plan.current_order), set(plan.proposed_order)
+            added = [slug for slug in plan.proposed_order if slug not in old]
+            removed = [slug for slug in plan.current_order if slug not in new]
+            if added:
+                print(f"  added    : {', '.join(added)}")
+            if removed:
+                print(f"  removed  : {', '.join(removed)}")
+        if plan.rows:
+            best = plan.rows[0]
+            print(f"  C_eff    : {best.cost:.6f} USD/1M input on {best.slug}")
+        if compare:
+            summary = compare_modes(plan.rows, plan.mix)
+            print(
+                "  compare  : "
+                f"order {summary['order']['endpoint']} ${summary['order']['estimated_cost_usd']:.6f} "
+                f"vs preferred {summary['preferred']['endpoint']} "
+                f"${summary['preferred']['estimated_cost_usd']:.6f} "
+                f"({summary['delta_pct']:+.1f}%)"
+            )
+        print(f"  changed  : {'yes' if plan.changed else 'no'}")
+        if plan.system_prompt:
+            warn(
+                f"target {plan.target.name}: the preset has a system_prompt; "
+                "check the new version after applying"
+            )
+        print()
+    if order_mode:
+        warn("routing_mode=order disables OpenRouter sticky routing; use routing_mode=preferred to keep it")
+
+
+def _print_refresh_result(result: RefreshResult) -> None:
+    labels = _window_label(result.window)
+    print(f"window   : {result.window_since or '?'} .. {result.window_until or '?'}  ({labels})")
+    if not result.applied:
+        print("dry run. re-run with --apply to write changed targets")
+        return
+    for plan in result.plans:
+        if result.applied_targets.get(plan.target.name):
+            print(f"applied {plan.target.name}")
+        else:
+            print(f"unchanged {plan.target.name}; no write")
+    if result.state_path is not None:
+        print(f"state    : {result.state_path}")
+
+
+def cmd_refresh(args: Namespace) -> int:
+    if args.apply and args.dry_run:
+        raise ConfigError("use either --apply or --dry-run, not both")
+    cfg = load_config(args.config)
+    log_path = Path(args.log_file).expanduser() if args.log_file else cfg.refresh.log_file
+    source = PiSessionSource(pattern=cfg.paths.sessions_glob)
+    client = OpenRouterClient()
+    with _optional_log(log_path) as log:
+        try:
+            result = run_refresh(
+                cfg,
+                source=source,
+                client=client,
+                target_names=args.target or (),
+                hours=args.hours,
+                days=args.days,
+                since=args.since,
+                until=args.until,
+                anchor=args.anchor,
+                apply=bool(args.apply),
+                on_plan=lambda plans: _print_refresh_plans(plans, args.compare),
+                log=log,
+            )
+        except AppError as exc:
+            log(f"error: {exc}")
+            raise
+        _print_refresh_result(result)
+    return 0
+
+
+def _print_verify(result: VerifyResult) -> None:
+    summary = result.summary
+    print(
+        f"{'when':19} {'provider':16} {'model':26} {'in':>8} {'cr':>8} {'cw':>5} {'out':>6} "
+        f"{'pred $':>11} {'actual $':>11} {'delta':>9} status"
+    )
+    for check in result.checks:
+        when = check.record.timestamp.strftime("%Y-%m-%d %H:%M:%S") if check.record.timestamp else "?"
+        provider = (check.provider or "?")[:16]
+        model = (check.model or check.record.routed_model or check.record.model)[:26]
+        predicted = "-" if check.predicted_cost is None else f"{check.predicted_cost:.6f}"
+        actual = "-" if check.actual_cost is None else f"{check.actual_cost:.6f}"
+        delta = "-" if check.delta_usd is None else f"{check.delta_usd:+.6f}"
+        print(
+            f"{when:19} {provider:16} {model:26} {check.record.input_tokens:>8,} "
+            f"{check.record.cache_read:>8,} {check.record.cache_write:>5,} {check.record.output_tokens:>6,} "
+            f"{predicted:>11} {actual:>11} {delta:>9} {check.status}"
+        )
+        for flag in check.flags:
+            print(f"    ! {flag}")
+        if check.error:
+            print(f"    ! {check.error}")
+    print()
+    print(
+        f"generations: {summary.verified} verified, {summary.missing} missing/expired, "
+        f"{summary.unmatched} unmatched, {summary.errors} error(s), {summary.mismatches} mismatch(es)"
+    )
+    print(
+        f"tokens     : input {summary.input:,}  cacheRead {summary.cache_read:,}  "
+        f"cacheWrite {summary.cache_write:,}  output {summary.output:,}"
+    )
+    print(f"mix        : f={summary.f:.4f}  R={summary.R:.5f}  fw={summary.fw:.5f}")
+    if summary.actual_c_eff is not None and summary.predicted_c_eff is not None:
+        print(
+            f"cost       : predicted ${summary.predicted_cost:.6f}  actual ${summary.actual_cost:.6f}  "
+            f"delta ${summary.delta_usd:+.6f}"
+            + (f" ({summary.delta_pct:+.2f}%)" if summary.delta_pct is not None else "")
+        )
+        print(
+            f"C_eff      : predicted ${summary.predicted_c_eff:.6f}  "
+            f"actual ${summary.actual_c_eff:.6f} per 1M input tokens"
+        )
+    print(f"cache      : discount ${summary.cache_discount:.6f}")
+    if summary.providers:
+        providers = ", ".join(
+            f"{name}={count}"
+            for name, count in sorted(summary.providers.items(), key=lambda item: (-item[1], item[0]))
+        )
+        print(f"providers  : {providers}")
+    if summary.flags:
+        flags = ", ".join(
+            f"{name} x{count}" for name, count in sorted(summary.flags.items(), key=lambda item: item[0])
+        )
+        print(f"flags      : {flags}")
+
+
+def cmd_verify(args: Namespace) -> int:
+    cfg = load_config(args.config)
+    source = PiSessionSource(pattern=cfg.paths.sessions_glob)
+    paths = source.discover()
+    if not paths:
+        raise ConfigError(f"no session files found under {cfg.paths.sessions_glob}")
+    records = list(source.iter_records(paths))
+    if not records:
+        raise ConfigError("no usage records found in the selected session files")
+    info(f"sessions   : {len(paths)} file(s), {len(records)} record(s)")
+
+    last = args.last if args.last is not None else (None if args.since or args.until else DEFAULT_LAST)
+    client = OpenRouterClient()
+    result = verify_generations(
+        records,
+        client=client,
+        last=last,
+        since=args.since,
+        until=args.until,
+        models=args.model or (),
+        routed_models=args.routed_model or (),
+        exclude_models=args.exclude_model or (),
+        providers=args.provider or (),
+        projects=args.project or (),
+        exclude_projects=args.exclude_project or (),
+        tolerance=args.tolerance,
+        progress=(lambda record: info(f"verify {record.response_id}")) if _VERBOSE else None,
+    )
+    summary = result.summary
+    if summary.selected == 0:
+        raise ConfigError("no session records with responseId matched the selection")
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "schema": "openrouter-routing/verify/v1",
+                    "filters": result.filters,
+                    "summary": summary.as_dict(),
+                    "records": [check.as_dict() for check in result.checks],
+                },
+                indent=2,
+            )
+        )
+    else:
+        _print_verify(result)
+
+    if summary.missing:
+        warn(f"{summary.missing} generation record(s) were not found or have expired")
+    if summary.unmatched:
+        warn(f"{summary.unmatched} provider(s) were not found in the endpoint list")
+    if summary.mismatches:
+        warn(f"{summary.mismatches} generation(s) differ from the predicted cost by more than tolerance")
+    if summary.verified == 0:
+        warn("no generation record could be verified")
+        return 1
+    if summary.errors:
+        warn(f"{summary.errors} generation lookup(s) failed")
+        return 1
+    return 0
+
+
+def _print_unit_preview(service_path: Path, timer_path: Path, service: str, timer: str) -> None:
+    print(f"# {service_path}")
+    print(service.rstrip())
+    print()
+    print(f"# {timer_path}")
+    print(timer.rstrip())
+
+
+def _print_commands(commands: Sequence[Sequence[str]]) -> None:
+    for command in commands:
+        print(f"ran {' '.join(command)}")
+
+
+def cmd_install_systemd(args: Namespace) -> int:
+    if args.mode != "daily":  # pragma: no cover - argparse restricts this today
+        raise ConfigError(f"unsupported systemd mode: {args.mode}")
+    if args.enable and args.print_only:
+        raise ConfigError("use either --enable or --print, not both")
+    if args.enable and (args.disable or args.remove):
+        raise ConfigError("--enable cannot be combined with --disable/--remove")
+
+    unit_dir = args.unit_dir
+    if args.disable or args.remove:
+        result = automation.uninstall_systemd(
+            unit_dir=unit_dir,
+            remove=bool(args.remove),
+            print_only=bool(args.print_only),
+        )
+        if not result.existing:
+            print(f"no openrouter-routing systemd units installed in {result.unit_dir}")
+            return 0
+        if args.print_only:
+            print(f"would remove units from {result.unit_dir}" if args.remove else "would disable the timer")
+            _print_commands(result.commands)
+            print("dry run: no systemctl command run and no file removed")
+            return 0
+        _print_commands(result.commands)
+        if result.disabled:
+            print(f"disabled {automation.TIMER_NAME}")
+        if result.removed:
+            print(f"removed {result.service_path}")
+            print(f"removed {result.timer_path}")
+        else:
+            print("unit files kept; add --remove to delete them")
+        return 0
+
+    cfg = load_config(args.config)
+    config_path = cfg.source_path or default_config_path()
+    if not cfg.loaded:
+        warn(f"{config_path} does not exist; refresh will use defaults")
+    elif not cfg.targets:
+        warn("config has no [[target]] blocks; refresh will fail until one is configured")
+
+    print_only = not args.enable
+    result = automation.install_systemd(
+        config_path=config_path,
+        unit_dir=unit_dir,
+        binary=args.binary,
+        force=bool(args.force),
+        enable=bool(args.enable),
+        print_only=print_only,
+    )
+    if print_only:
+        _print_unit_preview(result.service_path, result.timer_path, result.service_text, result.timer_text)
+        print()
+        print("dry run: no files written and no systemctl command run")
+        print("re-run with --enable to write the units and enable the timer")
+        tip("note: `loginctl enable-linger $USER` lets the timer run while you are logged out")
+        return 0
+
+    print(f"wrote {result.service_path}")
+    print(f"wrote {result.timer_path}")
+    _print_commands(result.commands)
+    print(
+        "timer enabled: login triggers a refresh after ~2min; long sessions refresh daily; "
+        "Persistent=true catches missed runs"
+    )
+    tip("note: `loginctl enable-linger $USER` lets the timer run while you are logged out")
+    return 0
+
+
+def cmd_doctor(args: Namespace) -> int:
+    cfg = load_config(args.config)
+    source = PiSessionSource(pattern=cfg.paths.sessions_glob)
+    client = OpenRouterClient()
+    checks = run_doctor(cfg, client=client, source=source)
+    for check in checks:
+        print(format_check(check))
+    bad = sum(1 for check in checks if not check.ok)
+    warnings = sum(1 for check in checks if check.ok and check.warning)
+    print(f"\n{len(checks)} check(s): {bad} failed, {warnings} warning(s)")
+    return 1 if doctor_failed(checks) else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -768,7 +1172,15 @@ def build_parser() -> argparse.ArgumentParser:
     cheapest = sub.add_parser("cheapest", help="rank endpoints by the cost of your token mix")
     _add_config_arg(cheapest)
     _add_output_args(cheapest)
-    cheapest.add_argument("model", help="model slug, e.g. deepseek/deepseek-chat-v3.1")
+    cheapest.add_argument(
+        "model", nargs="?", help="model slug, e.g. deepseek/deepseek-chat-v3.1 (optional with --preset)"
+    )
+    cheapest.add_argument("--preset", help="preset slug whose model/current order should be compared")
+    cheapest.add_argument(
+        "--compare-current",
+        action="store_true",
+        help="compare the preset's current provider.order with the proposed best endpoint",
+    )
     cheapest.add_argument("--mix", help="JSON file/'-' from measure --json")
     cheapest.add_argument("--f", type=float, default=None, help=f"cache-hit share (default {DEFAULT_F})")
     cheapest.add_argument("--r", type=float, default=None, help=f"output/input ratio (default {DEFAULT_R})")
@@ -807,11 +1219,18 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--sort", choices=["price", "throughput", "latency", "exacto"], help="provider.sort.by to persist"
     )
+    plan.add_argument(
+        "--routing-mode",
+        choices=["order", "preferred"],
+        default=None,
+        help="order pins endpoints; preferred keeps sticky routing (default order)",
+    )
     plan.add_argument("--ignore", default=None, help="comma separated provider slugs to ignore")
     plan.add_argument("--allow-fallbacks", dest="allow_fallbacks", action="store_true", default=None)
     plan.add_argument("--no-allow-fallbacks", dest="allow_fallbacks", action="store_false")
     _add_rank_args(plan, preset=True)
     plan.add_argument("--apply", action="store_true", help="POST the new config (creates a version)")
+    plan.add_argument("--dry-run", action="store_true", help="explicitly keep the current preset (default)")
     plan.add_argument("--force", action="store_true", help="apply even when provider.order is unchanged")
     plan.set_defaults(func=cmd_preset_plan)
 
@@ -821,7 +1240,104 @@ def build_parser() -> argparse.ArgumentParser:
     rollback.add_argument("slug")
     rollback.add_argument("--version", type=int, required=True)
     rollback.add_argument("--apply", action="store_true")
+    rollback.add_argument(
+        "--dry-run", action="store_true", help="explicitly keep the current preset (default)"
+    )
     rollback.set_defaults(func=cmd_preset_rollback)
+
+    refresh = sub.add_parser("refresh", help="measure a window and refresh configured routing targets")
+    _add_config_arg(refresh)
+    _add_output_args(refresh)
+    refresh.add_argument("--target", action="append", help="target name from config (repeatable)")
+    refresh.add_argument("--hours", type=float, default=None, help="override the refresh window")
+    refresh.add_argument("--days", type=float, default=None, help="override the refresh window")
+    refresh.add_argument("--since", help="only entries at/after this ISO timestamp")
+    refresh.add_argument("--until", help="only entries at/before this ISO timestamp")
+    refresh.add_argument(
+        "--anchor",
+        choices=["latest", "now"],
+        default=None,
+        help="relative window anchor (refresh default: now)",
+    )
+    refresh.add_argument("--apply", action="store_true", help="write changed targets")
+    refresh.add_argument("--dry-run", action="store_true", help="explicitly keep targets unchanged (default)")
+    refresh.add_argument("--compare", action="store_true", help="estimate order vs preferred routing")
+    refresh.add_argument("--log-file", help="append refresh diagnostics to this file")
+    refresh.set_defaults(func=cmd_refresh)
+
+    verify = sub.add_parser("verify", help="compare predicted cost with OpenRouter generation records")
+    _add_config_arg(verify)
+    _add_output_args(verify)
+    verify.add_argument(
+        "--last",
+        type=int,
+        default=None,
+        metavar="N",
+        help=f"verify the N most recent generations (default {DEFAULT_LAST} when no --since/--until)",
+    )
+    verify.add_argument("--since", help="only generations at/after this ISO timestamp (inclusive)")
+    verify.add_argument("--until", help="only generations at/before this ISO timestamp (inclusive)")
+    verify.add_argument("--model", action="append", help="filter requested model (repeatable)")
+    verify.add_argument("--routed-model", action="append", help="filter upstream responseModel (repeatable)")
+    verify.add_argument("--exclude-model", action="append", help="exclude requested model (repeatable)")
+    verify.add_argument("--provider", action="append", help="filter pi provider (repeatable)")
+    verify.add_argument("--project", action="append", help="session cwd root (repeatable, recursive)")
+    verify.add_argument(
+        "--exclude-project", action="append", help="exclude a session cwd root (repeatable, recursive)"
+    )
+    verify.add_argument(
+        "--tolerance",
+        type=float,
+        default=DEFAULT_TOLERANCE,
+        metavar="FRACTION",
+        help=f"relative cost mismatch tolerance (default {DEFAULT_TOLERANCE})",
+    )
+    verify.add_argument("--json", action="store_true", help="machine-readable verification report")
+    verify.set_defaults(func=cmd_verify)
+
+    automation_parser = sub.add_parser(
+        "install-systemd",
+        help="preview, install, disable, or remove the opt-in systemd user timer",
+    )
+    _add_config_arg(automation_parser)
+    _add_output_args(automation_parser)
+    automation_parser.add_argument("--mode", choices=["daily"], default="daily", help="unit mode (daily)")
+    automation_parser.add_argument(
+        "--enable",
+        action="store_true",
+        help="write the units, run daemon-reload, and enable --now the timer",
+    )
+    automation_parser.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="print the units and commands without writing or enabling",
+    )
+    automation_parser.add_argument("--force", action="store_true", help="overwrite existing unit files")
+    automation_parser.add_argument(
+        "--binary",
+        help="ExecStart binary (default: openrouter-routing from PATH, then the local venv/-m fallback)",
+    )
+    automation_parser.add_argument(
+        "--unit-dir",
+        help="unit directory (default: ${XDG_CONFIG_HOME:-~/.config}/systemd/user)",
+    )
+    automation_parser.add_argument(
+        "--disable",
+        action="store_true",
+        help="disable --now the timer (add --remove to delete the unit files)",
+    )
+    automation_parser.add_argument(
+        "--remove",
+        action="store_true",
+        help="disable and remove the unit files (implies --disable)",
+    )
+    automation_parser.set_defaults(func=cmd_install_systemd)
+
+    doctor = sub.add_parser("doctor", help="check config, sessions, credentials, network, and targets")
+    _add_config_arg(doctor)
+    _add_output_args(doctor)
+    doctor.set_defaults(func=cmd_doctor)
 
     config = sub.add_parser("config", help="show or initialize the XDG configuration")
     config_sub = config.add_subparsers(dest="config_command", required=True)
@@ -837,6 +1353,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_arg(config_init)
     _add_output_args(config_init)
     config_init.add_argument("--force", action="store_true")
+    config_init.add_argument("--dry-run", action="store_true", help="print the path without writing")
     config_init.set_defaults(func=cmd_config_init)
 
     return parser
@@ -850,7 +1367,10 @@ def main(argv: list[str] | None = None) -> int:
         args.format = "json"
     try:
         return int(args.func(args) or 0)
-    except (AppError, ConfigError, PlanError) as exc:
+    except AppError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .errors import PlanError
-from .pricing import EndpointScore, pct_stat
+from .pricing import EndpointScore, estimated_cost, pct_stat
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,43 @@ def emittable(rows: Iterable[EndpointScore]) -> tuple[list[EndpointScore], list[
     return safe, dropped
 
 
+def compare_modes(rows: Iterable[EndpointScore], mix: dict[str, Any]) -> dict[str, Any]:
+    """Estimate a mix under `order` and `sort: price` routing.
+
+    `order` uses the lowest C_eff endpoint. `preferred` approximates OpenRouter's
+    `sort: price` by minimizing uncached input plus output cost (cache-read
+    pricing is invisible to that sort); sticky routing then keeps the measured
+    cache-hit share. The exact sort tie-breaking is not public, so this is an
+    estimate, not a billing prediction.
+    """
+    candidates = [row for row in rows if row.slug and row.status == 0]
+    if not candidates:
+        raise PlanError("no healthy endpoint available for a mode comparison")
+    r = float(mix.get("R") or 0.0)
+    ordered = min(candidates, key=lambda row: (row.cost, row.slug))
+    sorted_by_price = min(
+        candidates,
+        key=lambda row: (row.in_price + r * row.out_price, row.cost, row.slug),
+    )
+    order_cost = estimated_cost(mix, ordered)
+    preferred_cost = estimated_cost(mix, sorted_by_price)
+    delta = preferred_cost - order_cost
+    return {
+        "order": {
+            "endpoint": ordered.slug,
+            "c_eff": ordered.cost,
+            "estimated_cost_usd": order_cost,
+        },
+        "preferred": {
+            "endpoint": sorted_by_price.slug,
+            "c_eff": sorted_by_price.cost,
+            "estimated_cost_usd": preferred_cost,
+        },
+        "delta_usd": delta,
+        "delta_pct": (delta / order_cost * 100) if order_cost else 0.0,
+    }
+
+
 def provider_block(
     rows: list[EndpointScore],
     *,
@@ -97,3 +134,55 @@ def provider_block(
         if max_ttft is not None:
             block["preferred_max_latency"] = {ttft_pct: max_ttft}
     return {"provider": block}
+
+
+def first_ordered_endpoint(rows: Iterable[EndpointScore], order: Iterable[str]) -> EndpointScore | None:
+    """Return the first endpoint in a preset's order that still exists."""
+    by_slug = {row.slug: row for row in rows}
+    for slug in order:
+        row = by_slug.get(slug)
+        if row is not None:
+            return row
+    return None
+
+
+def compare_current(
+    rows: Iterable[EndpointScore],
+    current_order: Iterable[str],
+    mix: dict[str, Any],
+    *,
+    proposed: EndpointScore | None = None,
+) -> dict[str, Any]:
+    """Compare a preset's current order with the best endpoint for this mix."""
+    candidates = [row for row in rows if row.slug]
+    if not candidates:
+        raise PlanError("no endpoints available for a current-order comparison")
+    best = proposed or min(candidates, key=lambda row: (row.cost, row.slug))
+    order = list(current_order)
+    current = first_ordered_endpoint(candidates, order)
+
+    def entry(row: EndpointScore | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        return {
+            "endpoint": row.slug,
+            "c_eff": row.cost,
+            "estimated_cost_usd": estimated_cost(mix, row),
+        }
+
+    current_entry = entry(current)
+    proposed_entry = entry(best)
+    if current_entry is not None:
+        delta = proposed_entry["estimated_cost_usd"] - current_entry["estimated_cost_usd"]
+        base = current_entry["estimated_cost_usd"]
+        delta_pct = (delta / base * 100) if base else 0.0
+    else:
+        delta = None
+        delta_pct = None
+    return {
+        "current_order": order,
+        "current": current_entry,
+        "proposed": proposed_entry,
+        "delta_usd": delta,
+        "delta_pct": delta_pct,
+    }

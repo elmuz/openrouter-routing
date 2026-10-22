@@ -31,6 +31,13 @@ days = 7
 # projects = ["~/code", "~/projects"]
 # models = ["@preset/ds4-flash"]
 
+[refresh]
+days = 7
+anchor = "now"                 # refresh defaults to wall clock
+routing_mode = "order"         # order | preferred
+lock_timeout = 0
+# log_file = "~/.local/state/openrouter-routing/refresh.log"
+
 [rank]
 top = 4
 healthy_only = true
@@ -44,21 +51,50 @@ max_price_from = 0
 
 [[target]]
 name = "ds4-flash"
-kind = "preset"
+kind = "preset"              # preset | pi-model
 preset = "ds4-flash"
+model = "~deepseek/deepseek-flash-latest"
+# routing_mode = "preferred"  # optional per-target override
+# projects = ["~/code"]       # optional per-target mix filters
+# models = ["@preset/ds4-flash"]
+
+[[target]]
+name = "local-ds4"
+kind = "pi-model"
+pi_model_id = "@preset/ds4-flash"
+pi_provider = "openrouter"
 model = "~deepseek/deepseek-flash-latest"
 ```
 
 Command-line flags override config values. `[measure]` defaults apply only when
-no CLI time flag is given.
+no CLI time flag is given. `[refresh]` defaults apply to the `refresh` command;
+see [Refresh](refresh.md) for target filters, routing modes, XDG state, and the
+lock file.
 
-`targets` are scaffolding for the refresh workflow; the CLI exposes them through
-`config show`, while end-to-end `refresh --apply` and the local `pi-model` target
-land in a later phase (see `PLAN.md`).
+`kind = "pi-model"` patches `compat.openRouterRouting` in
+`~/.pi/agent/models.json` atomically (or the configured `pi_models_json`) and
+keeps a timestamped backup. The preset target remains the recommended default
+until request-level routing precedence over a preset has been verified with a
+controlled live request.
 
 ## Automation
 
-No systemd unit, timer, or login hook is installed or enabled by default. When
-the opt-in automation phase lands it will use a daily timer
-(`Persistent=true`) and an explicit install command. Until then, run the CLI
-manually or from your own wrapper.
+No systemd unit, timer, or login hook is installed or enabled by default. The
+installer is a dry run unless `--enable` is passed:
+
+```bash
+openrouter-routing install-systemd --mode daily            # preview
+openrouter-routing install-systemd --mode daily --enable   # write + enable
+```
+
+`--enable` installs
+`${XDG_CONFIG_HOME:-~/.config}/systemd/user/openrouter-routing.{service,timer}`,
+reloads the user manager, and enables the timer. The timer refreshes after login
+and once a day while the user manager stays alive, with `Persistent=true` and a
+randomized delay. `--disable` turns it off without deleting files; `--remove` is
+the reversible uninstall. See [Automation](automation.md) for journald, linger,
+credentials, and uninstall details.
+
+Until you opt in, run `openrouter-routing refresh --apply` manually or from your
+own wrapper. `refresh --log-file` is available for wrappers that cannot use
+journald.

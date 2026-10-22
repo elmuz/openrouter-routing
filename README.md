@@ -55,11 +55,22 @@ uv run openrouter-routing preset plan ds4-flash --mix /tmp/mix.json --top 4
 
 # 5. Apply it explicitly
 uv run openrouter-routing preset plan ds4-flash --mix /tmp/mix.json --top 4 --apply
+
+# 6. Or refresh configured targets (dry run by default)
+uv run openrouter-routing refresh
+uv run openrouter-routing refresh --apply
+uv run openrouter-routing verify --last 20
+uv run openrouter-routing doctor
+
+# Optional: opt-in daily systemd user timer (preview first)
+uv run openrouter-routing install-systemd --mode daily
+uv run openrouter-routing install-systemd --mode daily --enable
 ```
 
-`measure`, `cheapest`, and `preset show/plan` are read-only; writes require
-`--apply`. `measure` is fully offline unless `--cost-model` is passed. The
-legacy `./measure.py`, `./cheapest.py`, and `./preset.py` wrappers still work.
+`measure`, `cheapest`, `preset show/plan`, `refresh`, and `verify` are
+read-only; writes require `--apply`. `measure` is fully offline unless
+`--cost-model` is passed, while `verify` always uses the network. The legacy
+`./measure.py`, `./cheapest.py`, and `./preset.py` wrappers still work.
 
 ## Documentation
 
@@ -69,6 +80,9 @@ legacy `./measure.py`, `./cheapest.py`, and `./preset.py` wrappers still work.
 | [Measure](docs/measure.md) | Time windows, filters, summaries, output formats |
 | [Routing](docs/routing.md) | Endpoint ranking, `--provider-json`, routing semantics |
 | [Presets](docs/presets.md) | `preset show`, `plan`, `rollback` |
+| [Refresh](docs/refresh.md) | Daily refresh, targets, routing modes, state and locks |
+| [Verify](docs/verify.md) | Compare predicted cost with real OpenRouter generation records |
+| [Automation](docs/automation.md) | Opt-in systemd user timer: preview, enable, linger, uninstall |
 | [Configuration](docs/configuration.md) | XDG paths, `config.toml`, environment variables |
 | [Development](docs/development.md) | Setup, tests, repository layout, roadmap |
 

@@ -7,23 +7,38 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
-from .errors import OpenRouterError
+from .errors import OpenRouterError, OpenRouterNotFound
 from .paths import auth_path
 
 API = "https://openrouter.ai/api/v1"
 Opener = Callable[..., Any]
 
 
+def _auth_file_key() -> str | None:
+    try:
+        blob = json.loads(auth_path().read_text(encoding="utf-8"))["openrouter"]
+        key = blob.get("key") if isinstance(blob, dict) else blob
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+    return (key or "").strip() or None
+
+
+def api_key_source() -> str | None:
+    """Describe where credentials come from without exposing the key."""
+    if (os.environ.get("OPENROUTER_API_KEY") or "").strip():
+        return "OPENROUTER_API_KEY"
+    if _auth_file_key():
+        return str(auth_path())
+    return None
+
+
 def api_key() -> str | None:
     """OPENROUTER_API_KEY, else the key stored by pi in auth.json."""
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
-        try:
-            blob = json.loads(auth_path().read_text(encoding="utf-8"))["openrouter"]
-            key = blob.get("key") if isinstance(blob, dict) else blob
-        except (OSError, KeyError, ValueError, TypeError):
-            return None
+        key = _auth_file_key()
     return (key or "").strip() or None
 
 
@@ -68,7 +83,8 @@ class OpenRouterClient:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:400]
-            raise OpenRouterError(f"{method} {path}: HTTP {exc.code} {exc.reason}\n{detail}") from exc
+            error = OpenRouterNotFound if exc.code == 404 else OpenRouterError
+            raise error(f"{method} {path}: HTTP {exc.code} {exc.reason}\n{detail}") from exc
         except urllib.error.URLError as exc:
             raise OpenRouterError(f"{method} {path}: {exc.reason}") from exc
         except ValueError as exc:
@@ -91,6 +107,15 @@ class OpenRouterClient:
         payload = self.get_json("/models")
         data = payload.get("data") if isinstance(payload, dict) else None
         return data if isinstance(data, list) else []
+
+    def fetch_generation(self, generation_id: str) -> dict[str, Any]:
+        """Return one generation record; raises OpenRouterNotFound when expired."""
+        query = urlencode({"id": generation_id})
+        payload = self.get_json(f"/generation?{query}", auth=True)
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            raise OpenRouterError(f"/generation?id={generation_id}: unexpected response")
+        return data
 
     def get_preset(self, slug: str) -> dict[str, Any]:
         payload = self.get_json(f"/presets/{slug}", auth=True)

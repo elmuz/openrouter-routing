@@ -24,7 +24,15 @@ only `provider.order` plus the filters you request. It resolves
 
 A no-op plan does **not** create a new version unless `--force` is passed.
 
+`plan --routing-mode preferred` keeps sticky routing: it removes
+`provider.order`, sets `provider.sort = {by = "price"}`, and emits soft
+`preferred_*` floors instead of hard performance filters. `--dry-run` is an
+explicit form of the default read-only behavior.
+
 Authentication uses `OPENROUTER_API_KEY`, falling back to the OpenRouter entry
 in `~/.pi/agent/auth.json`. `show` and `plan` without `--apply` are read-only.
+
+For scheduled, multi-target updates use [`refresh`](refresh.md), which wraps this
+preset backend and adds mix filters, state, locks, and the local pi target.
 
 Endpoint ranking and filtering are documented in [Routing](routing.md).

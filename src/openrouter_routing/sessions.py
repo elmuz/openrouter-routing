@@ -26,6 +26,7 @@ class SessionRecord:
     session_id: str | None
     path: str
     message_id: str | None
+    response_id: str | None = None
 
     @property
     def input_tokens(self) -> int:
@@ -129,6 +130,14 @@ def _record_from(
         session_id=session_id,
         path=path,
         message_id=_text(rec.get("id")) or _text(msg.get("id")),
+        response_id=(
+            _text(msg.get("responseId"))
+            or _text(msg.get("response_id"))
+            or _text(msg.get("generationId"))
+            or _text(msg.get("generation_id"))
+            or _text(rec.get("responseId"))
+            or _text(rec.get("response_id"))
+        ),
     )
 
 

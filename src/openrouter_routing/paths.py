@@ -42,6 +42,19 @@ def default_config_path() -> Path:
     return config_dir() / "config.toml"
 
 
+def state_file() -> Path:
+    return state_dir() / "state.json"
+
+
+def lock_file() -> Path:
+    return state_dir() / "refresh.lock"
+
+
+def systemd_user_dir() -> Path:
+    """XDG location for systemd *user* units (not app-specific)."""
+    return config_home() / "systemd" / "user"
+
+
 def pi_agent_dir() -> Path:
     override = os.environ.get("PI_AGENT_DIR")
     return Path(override).expanduser() if override else Path("~/.pi/agent").expanduser()

@@ -12,6 +12,9 @@ straight to the command reference.
 | [Measure](measure.md) | `measure`: time windows, filters, summaries, output formats |
 | [Routing](routing.md) | `cheapest`: endpoint ranking, `--provider-json`, routing semantics |
 | [Presets](presets.md) | `preset show`, `preset plan`, `preset rollback` |
+| [Refresh](refresh.md) | Daily `refresh` workflow, targets, routing modes, state and locks |
+| [Verify](verify.md) | Compare predicted cost with real OpenRouter generation records |
+| [Automation](automation.md) | Opt-in systemd user timer: preview, enable, linger, uninstall |
 | [Configuration](configuration.md) | XDG paths, `config.toml`, environment variables, automation |
 | [Development](development.md) | Setup, tests, repository layout, roadmap |
 

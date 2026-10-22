@@ -5,7 +5,7 @@ It is intentionally implementation-oriented: every phase lists deliverables,
 acceptance criteria, and the decisions that should not be silently changed.
 
 Repository: <https://github.com/elmuz/openrouter-routing>
-Last updated: 2026-10-22.
+Last updated: 2026-10-23.
 
 ## 1. Goals and constraints
 
@@ -34,17 +34,20 @@ Constraints and preferences:
 | 1 | Package refactor, tests, CI | Done |
 | 2 | XDG config, CLI, early filters | Done |
 | 3 | Analysis polish and remaining filters | Done |
-| 4 | `refresh` workflow and local pi target | Not started |
-| 5 | Opt-in systemd automation | Not started |
-| 6 | Cost verification and hardening | Not started |
+| 4 | `refresh` workflow and local pi target | Done |
+| 5 | Opt-in systemd automation | Done |
+| 6 | Cost verification and hardening | Done |
 | 7 | Other harness adapters | Deferred / low priority |
 
 Phase 3 work is on top of `1338379 Initial Python package with XDG config and tests`.
+Phase 4 adds the refresh workflow, target backends, state/locks, and `doctor`.
+Phase 5 adds the opt-in systemd user timer installer and tracked unit templates.
+Phase 6 adds generation-record verification, current-order comparisons, and release hardening.
 
 Validation at the time of writing:
 
 ```text
-uv run pytest                    65 passed
+uv run pytest                    127 passed
 uv run ruff check .              clean
 uv run ruff format --check .     clean
 GitHub Actions                   Python 3.11, 3.12, 3.13, 3.14 green
@@ -57,9 +60,21 @@ Live smoke tests completed read-only:
 ./cheapest.py '~deepseek/deepseek-flash-latest' --mix examples/mix.json
 ./preset.py show ds4-flash
 ./preset.py plan ds4-flash --mix examples/mix.json --top 4
+uv run openrouter-routing verify --last 3
 ```
 
-No OpenRouter preset was modified during this work.
+Phase 4 tests inject HTTP clients, temporary session files, and temporary
+`models.json` files, so the whole refresh/target/state/doctor path is covered
+offline. No OpenRouter preset was modified during this work; live `refresh
+--apply` remains a manual action.
+
+Phase 5 tests inject a fake `run_command`, so the installer never runs
+`systemctl` in the default suite. The dry-run, enable, overwrite, failure,
+disable, and remove paths are covered.
+
+Phase 6 tests use recorded generation fixtures and a fake OpenRouter client.
+No generation API call is made by the default test suite. Coverage reporting is
+informational in CI; the local run is 85% with `coverage run -m pytest`.
 
 ## 3. Architecture and invariants
 
@@ -89,15 +104,17 @@ Invariants:
 ```text
 src/openrouter_routing/
 ├── api.py          OpenRouter HTTP client + alias resolution
-├── cli.py          argparse CLI: measure / cheapest / preset / config
+├── automation.py   opt-in systemd user unit installer
+├── cli.py          argparse CLI: measure / cheapest / preset / refresh / verify / config
 ├── config.py       TOML config and dataclasses
 ├── errors.py       expected user-facing errors
 ├── mix.py          filtering, time windows, aggregation, grouping
 ├── paths.py        XDG and pi-agent paths
 ├── preset.py       preset config planning and field preservation
 ├── pricing.py      endpoint scoring and percentile helpers
-├── routing.py      filtering, ranking, provider blocks
-└── sessions.py     pi session JSONL parsing
+├── routing.py      filtering, ranking, provider blocks, mode comparisons
+├── sessions.py     pi session JSONL parsing
+└── verify.py       generation-record cost verification
 ```
 
 Root `measure.py`, `cheapest.py`, and `preset.py` are compatibility wrappers
@@ -132,7 +149,7 @@ only. They add `src/` to `sys.path` and delegate to the package CLI.
 | Alias handling | resolve `~author/model-latest` via `/models` | The alias itself exposes no endpoints |
 | Preset writes | full config POST, preserve unknown fields | API has no PATCH; partial bodies replace the config |
 | No-op writes | skipped by default | Prevents daily version spam |
-| Systemd | not installed, future opt-in only | User explicitly requested opt-in automation |
+| Systemd | preview by default; opt-in `--enable` only | User explicitly requested opt-in automation |
 | Target default | preset target first | Proven path; local pi target needs precedence verification |
 
 ## 5. Phase 0 — Repository bootstrap (done)
@@ -223,8 +240,8 @@ Deliverables completed:
 - Measure defaults can come from `[measure]` when no time flag is passed.
 - Session discovery defaults to the configured pi sessions glob.
 - `cheapest` and `preset` use the same config-derived rank defaults.
-- Targets are parsed and exposed through `config show`, but not yet consumed by
-  a refresh workflow.
+- Targets are parsed and exposed through `config show`; Phase 4 later consumes
+  them in the refresh workflow.
 
 Early Phase 3 work landed here because it was cheap and improved usability:
 
@@ -300,7 +317,7 @@ Implementation notes:
 - `SessionSource` is a protocol with `PiSessionSource` as the only adapter;
   moving pi parsing into `sources/pi.py` remains Phase 7 work.
 
-## 9. Phase 4 — Daily refresh workflow (next major phase)
+## 9. Phase 4 — Daily refresh workflow (done)
 
 ### 4.1 `refresh` command
 
@@ -331,54 +348,80 @@ create version noise; a failed run leaves the current routing untouched.
 
 Preset target (existing path):
 
-- [ ] Wrap `preset` functions behind a `Target` backend.
-- [ ] Preserve current config fields and no-op behavior.
-- [ ] Add tests for apply/diff/no-op and system-prompt warning.
+- [x] Wrap `preset` functions behind a `Target` backend.
+- [x] Preserve current config fields and no-op behavior.
+- [x] Add tests for apply/diff/no-op and system-prompt warning.
 
 Local pi target:
 
-- [ ] Add `kind = "pi-model"` backend that updates
+- [x] Add `kind = "pi-model"` backend that updates
       `~/.pi/agent/models.json` `compat.openRouterRouting`.
-- [ ] Preserve all other provider/model fields and unknown keys.
-- [ ] Write atomically with a timestamped backup.
-- [ ] Validate JSON before replacing.
-- [ ] Verify request-level `provider` precedence over a preset with a controlled
+- [x] Preserve all other provider/model fields and unknown keys.
+- [x] Write atomically with a timestamped backup.
+- [x] Validate JSON before replacing.
+- [x] Verify request-level `provider` precedence over a preset with a controlled
       test request before making it the default target.
+
+Implementation note: the preset target remains the default/recommended target.
+Request-level precedence is documented but has not been verified with a live
+controlled request, so `pi-model` is available but not the default.
 
 Acceptance: the user can choose preset or local pi routing per target, with no
 silent cross-target interference.
 
 ### 4.3 Multi-target and routing modes
 
-- [ ] Support multiple `[[target]]` blocks with per-target mix filters.
-- [ ] Default per-target mix can be selected by model, routed model, and/or
+- [x] Support multiple `[[target]]` blocks with per-target mix filters.
+- [x] Default per-target mix can be selected by model, routed model, and/or
       project tree.
-- [ ] Add `routing_mode = "order" | "preferred"`.
+- [x] Add `routing_mode = "order" | "preferred"`.
   - `order`: current cache-aware pinning.
   - `preferred`: `sort: price` plus hard `ignore`/quantization and soft
     `preferred_*` floors, preserving OpenRouter sticky routing.
-- [ ] Emit a clear warning that `order` disables sticky routing.
-- [ ] Add a comparison mode that estimates the last N days under both modes.
+- [x] Emit a clear warning that `order` disables sticky routing.
+- [x] Add a comparison mode that estimates the last N days under both modes.
 
 ### 4.4 Safety and observability
 
-- [ ] `doctor` command: config path, pi dir, session count, API key source,
+- [x] `doctor` command: config path, pi dir, session count, API key source,
       endpoint reachability, target validity.
-- [ ] `--dry-run` is the default for every mutating command.
-- [ ] State file records schema version, timestamp, target, mix, old/new order.
-- [ ] Optional `--log-file`; systemd uses journald.
-- [ ] Tests for atomic writes, backups, locks, and failed network calls.
+- [x] `--dry-run` is the default for every mutating command.
+- [x] State file records schema version, timestamp, target, mix, old/new order.
+- [x] Optional `--log-file`; systemd uses journald.
+- [x] Tests for atomic writes, backups, locks, and failed network calls.
 
-## 10. Phase 5 — Opt-in automation (systemd user units)
+### 4.5 Implementation notes
+
+- `refresh` plans every selected target before writing any of them, so a network,
+  config, or ranking failure leaves all targets untouched.
+- The refresh window defaults to `[refresh] days = 7`, `anchor = "now"`; ad-hoc
+  `measure` keeps `anchor = "latest"`.
+- Per-target filters are the only mix selectors for refresh (no implicit
+  inheritance from `[measure]`), which keeps each target explicit.
+- `--apply` with no routing change skips the target write. State is still
+  updated for a successful apply run so the last run is observable.
+- State lives in `${XDG_STATE_HOME:-~/.local/state}/openrouter-routing/state.json`
+  with schema `openrouter-routing/state/v1`. The lock is in the same directory.
+- The comparison's preferred estimate approximates `sort: price` by minimizing
+  uncached input plus output price; OpenRouter's exact tie-breaking is not public.
+- The local `pi-model` backend patches only
+  `providers.<provider>.models[<id>].compat.openRouterRouting`, validates the
+  serialized JSON, copies a timestamped backup, and then atomically replaces
+  `models.json`.
+
+## 10. Phase 5 — Opt-in automation (systemd user units) (done)
 
 Nothing in this phase is enabled by default. No unit files are installed by
 `uv sync`, `config init`, or any ordinary command.
 
-Planned command:
+Commands:
 
 ```bash
 openrouter-routing install-systemd --mode daily          # print/dry run
+openrouter-routing install-systemd --mode daily --print  # explicit preview
 openrouter-routing install-systemd --mode daily --enable # explicit opt-in
+openrouter-routing install-systemd --disable             # keep files, stop timer
+openrouter-routing install-systemd --remove              # disable + delete
 ```
 
 ### 5.1 Unit files
@@ -390,66 +433,116 @@ systemd/openrouter-routing.service
 systemd/openrouter-routing.timer
 ```
 
+The wheel includes the templates as `openrouter_routing/systemd/` via a Hatch
+force-include, so an installed copy does not depend on the repository layout.
+
 Timer semantics:
 
 - `OnStartupSec=2min` so a login triggers a refresh.
 - `OnUnitActiveSec=1d` for long-running sessions.
 - `Persistent=true` to catch missed runs.
-- `RandomizedDelaySec` to avoid a thundering herd.
+- `RandomizedDelaySec=15min` to avoid a thundering herd.
+- `AccuracySec=1min`.
 - `WantedBy=timers.target`.
 
 Service semantics:
 
 - `Type=oneshot`
 - `ExecStart` points at the installed `openrouter-routing refresh --apply`
-  binary (or the repo `.venv` binary if explicitly requested).
-- `WorkingDirectory` set to the repository only if needed.
-- `StandardOutput=journal`.
+  binary, with the absolute `--config` path captured at install time. The
+  default falls back to the repo `.venv` binary or `python -m openrouter_routing`;
+  `--binary` overrides it.
+- No `WorkingDirectory` is needed; the config path is explicit.
+- `StandardOutput=journal` and `StandardError=journal`.
 
 ### 5.2 Installer
 
-- [ ] `--print` mode emits units without writing.
-- [ ] `--enable` is required to run `systemctl --user daemon-reload` and
-      `enable --now`.
-- [ ] Refuse to overwrite existing units without `--force`.
-- [ ] Document `loginctl enable-linger` for runs while logged out.
-- [ ] Explain the interaction between login-triggered and daily runs.
-- [ ] Uninstall path: `--disable`/`--remove`.
+- [x] `--print` mode emits units without writing.
+- [x] Plain `install-systemd` is also a preview/dry run.
+- [x] `--enable` is required to write units, run
+      `systemctl --user daemon-reload`, and `enable --now` the timer.
+- [x] Refuse to overwrite existing units without `--force`.
+- [x] Document `loginctl enable-linger` for runs while logged out.
+- [x] Explain the interaction between login-triggered and daily runs.
+- [x] Uninstall path: `--disable`/`--remove`; `--remove` implies `--disable`.
+- [x] `--unit-dir` and `--binary` overrides for non-standard installations.
+
+Implementation notes:
+
+- Units live in `${XDG_CONFIG_HOME:-~/.config}/systemd/user/`.
+- `automation.py` renders the templates and takes an injected command runner,
+  so tests never touch the real user manager.
+- The installer captures the config path because a systemd user service does not
+  inherit the interactive shell's `XDG_CONFIG_HOME` or
+  `OPENROUTER_ROUTING_CONFIG`.
+- `OPENROUTER_API_KEY` is not inherited either; `docs/automation.md` documents
+  using `~/.pi/agent/auth.json` or an explicit user-manager environment.
+- `--remove` disables the timer, deletes both unit files, then runs
+  `daemon-reload`; a subsequent install is again an explicit opt-in.
 
 Acceptance: a fresh clone + normal commands never enables a timer; opting in is
 an explicit, documented action with a reversible uninstall.
 
-## 11. Phase 6 — Verification, cost validation, hardening
+## 11. Phase 6 — Verification, cost validation, hardening (done)
 
 ### 6.1 `verify` command
 
-- [ ] Read recent pi messages with `responseId`.
-- [ ] Fetch `GET /api/v1/generation?id=...`.
-- [ ] Compare predicted `C_eff` with actual `total_cost`.
-- [ ] Report provider, cached tokens, cache discount, and cache writes.
-- [ ] Flag likely causes of divergence:
-      cache TTL, minimum cacheable prompt, truncation, cache-write pricing.
-- [ ] Support `--last N`, `--since`, `--model`, `--project`.
-- [ ] Handle missing/expired generation records gracefully.
-- [ ] Tests with recorded JSON fixtures; no live network by default.
+- [x] Read recent pi messages with `responseId` (also accepts `response_id`,
+      `generationId`, and `generation_id`).
+- [x] Fetch `GET /api/v1/generation?id=...` through `OpenRouterClient`.
+- [x] Compare predicted `C_eff` with actual `total_cost`, using pi's token
+      counters and the generation provider's endpoint prices.
+- [x] Report provider, cached tokens, cache discount, and cache writes.
+- [x] Flag likely causes of divergence: cache TTL/minimum prompt, missing
+      cache pricing, cache-write pricing, truncation/tokenizer differences,
+      BYOK/upstream cost, and missing cache discounts.
+- [x] Support `--last N`, `--since`, `--model`, `--project`, plus
+      `--routed-model`, `--provider`, exclusions, and `--tolerance`.
+- [x] Handle missing/expired generation records gracefully: 404 is `missing`,
+      not a fatal error; the command exits non-zero only when nothing can be
+      verified or a non-404 lookup fails.
+- [x] Tests with recorded JSON fixtures; no live network by default.
 
 ### 6.2 Cost and routing comparisons
 
-- [ ] `cheapest --compare-current` for a preset: show current order vs proposed
-      order with estimated per-1M-token and 7-day costs.
-- [ ] `refresh --compare` summary before apply.
-- [ ] Optional weekly summary of cache-hit share and effective cost.
-- [ ] Validate `order` vs `preferred`/sticky routing assumptions with real
-      `generation` data over a week.
+- [x] `cheapest --compare-current --preset SLUG`: show the first still-available
+      endpoint in the current order versus the proposed endpoint, with
+      per-1M-token `C_eff` and measured-mix costs.
+- [x] `refresh --compare` summary before apply (implemented in Phase 4).
+- [x] Weekly summary of cache-hit share and effective cost through the `verify`
+      summary (`f`, `R`, `fw`, actual `C_eff`, cache discount, provider mix)
+      over a `--since` window.
+- [x] Validate `order` versus `preferred`/sticky routing with real generation
+      data: `verify` reports provider distribution and actual `C_eff`; the
+      documented weekly workflow compares it with the `refresh --compare`
+      estimate.
 
 ### 6.3 Release hardening
 
-- [ ] Add `uv build` to CI.
-- [ ] Add coverage reporting (threshold or informational).
-- [ ] Add `CHANGELOG.md` before the first tagged release.
-- [ ] Add `v0.2.0` tag after Phase 4/5.
-- [ ] Consider a PyPI release only if installation via `uv tool install` from
-      GitHub is insufficient.
+- [x] Add `uv build` to CI.
+- [x] Add informational coverage reporting with `coverage run -m pytest` and
+      `coverage report` (85% locally at the time of writing).
+- [x] Add `CHANGELOG.md` before the first tagged release.
+- [x] Bump the package to `0.2.0` after Phase 4/5/6.
+- [ ] Create the `v0.2.0` git tag after the changes are committed and CI is
+      green (manual release step; this working tree is not committed here).
+- [x] No PyPI release: installation from GitHub with `uv tool install` is
+      sufficient for now.
+
+Implementation notes:
+
+- `OpenRouterNotFound` distinguishes an expired generation record from other
+  HTTP failures.
+- Endpoint matching uses `provider_name`, then the tag prefix, and prefers an
+  endpoint with cache-read pricing when the session has cache reads. Multiple
+  quantizations of one provider are resolved deterministically by tag; the
+  generation record does not expose the chosen quantization.
+- `verify` defaults to the last 20 generations when no time window is given, so
+  an ad-hoc run does not issue thousands of API calls.
+- The comparison mix for `cheapest --compare-current` uses the saved token
+  counters when present; otherwise it synthesizes one million input tokens from
+  the selected `f`/`R`/`fw`, so `C_eff` and the mix cost agree.
+- CI now runs lint, format check, coverage, and `uv build` on Python 3.11–3.14.
 
 ## 12. Phase 7 — Extensibility (deferred)
 
@@ -487,19 +580,29 @@ Definition of done for a phase:
 
 ## 14. Open questions
 
-1. Should the primary apply target be the remote preset or local pi
-   `models.json`? Current default is preset; local pi is technically cleaner for
-   a pi-only workflow but needs precedence verification.
-2. Default refresh window: 7 days is proposed because it is stable; 3 hours is
-   useful for a single dense session but noisy for daily automation.
-3. Should `refresh` use `anchor=now` by default while `measure` keeps
-   `anchor=latest`? Proposed: yes for refresh, no for ad-hoc.
-4. Multi-target config shape: one target per model, or one target per
-   project/model pair? Start simple, extend only with real examples.
-5. Should `preferred` mode become the default to preserve sticky routing, or is
-   explicit `order` worth losing stickiness for cache-price certainty?
-6. How much cost history should be stored under XDG state? Proposed: last run
-   only plus the last applied order, not a database.
+Resolved in Phase 4:
+
+1. Primary apply target: the preset remains the default/recommended target;
+   `pi-model` is available per target but its request-level precedence over a
+   preset still needs a controlled live check before it becomes the default.
+2. Refresh window: `days = 7` from `[refresh]`.
+3. Refresh anchor: `anchor = "now"` for refresh; `measure` keeps `"latest"`.
+4. Multi-target shape: one `[[target]]` per destination, with optional per-target
+   model/routed-model/project filters. No nested project/model matrix yet.
+5. Routing mode: `order` stays the default with an explicit sticky-routing
+   warning; `preferred` is opt-in and comparable with `--compare`.
+6. State history: last run only (window, target, mix, old/new orders), not a
+   database.
+
+Still open:
+
+1. When should `pi-model` become the recommended default target? Verify a
+   controlled request where both a preset and `compat.openRouterRouting` set
+   routing, then document/apply the result.
+2. Should a future `refresh` keep an opt-in tiny history (e.g. last N runs) for
+   trend checks, or is last-run state enough?
+3. Should `preferred` expose a per-target `max_price` guardrail, given that
+   `max_price` has no cache-read field?
 
 ## 15. Quick command reference
 
@@ -508,14 +611,26 @@ uv sync
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
+uv run coverage run -m pytest && uv run coverage report
 uv build
 
 uv run openrouter-routing measure --days 7 --by project
 uv run openrouter-routing measure --days 30 --project ~/code --json
 uv run openrouter-routing cheapest '~deepseek/deepseek-flash-latest' --mix examples/mix.json
 uv run openrouter-routing cheapest deepseek/deepseek-v4-flash --mix examples/mix.json --provider-json
+uv run openrouter-routing cheapest --preset ds4-flash --mix examples/mix.json --compare-current
 uv run openrouter-routing preset show ds4-flash --versions 5
 uv run openrouter-routing preset plan ds4-flash --mix examples/mix.json --top 4
+uv run openrouter-routing refresh --target ds4-flash
+uv run openrouter-routing refresh --target ds4-flash --apply
+uv run openrouter-routing refresh --compare --apply
+uv run openrouter-routing verify --last 20
+uv run openrouter-routing verify --since 2026-10-01T00:00:00Z --json
+uv run openrouter-routing doctor
+uv run openrouter-routing install-systemd --mode daily
+uv run openrouter-routing install-systemd --mode daily --enable
+uv run openrouter-routing install-systemd --disable
+uv run openrouter-routing install-systemd --remove
 uv run openrouter-routing config path
 uv run openrouter-routing config init
 uv run openrouter-routing config show

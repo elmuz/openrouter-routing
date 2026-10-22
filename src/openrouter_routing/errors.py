@@ -13,5 +13,9 @@ class OpenRouterError(AppError):
     """OpenRouter API failure or unusable response."""
 
 
+class OpenRouterNotFound(OpenRouterError):
+    """An OpenRouter resource (for example an expired generation) is gone."""
+
+
 class PlanError(AppError):
     """A routing plan cannot be produced."""

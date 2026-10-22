@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from argparse import Namespace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -253,3 +254,181 @@ def test_measure_cost_model(session_paths, monkeypatch, tmp_path, capsys) -> Non
     assert payload["cost_model"]["endpoint"] == "a/fp8"
     assert payload["estimated_cost_usd"] > 0
     assert all(group["estimated_cost_usd"] > 0 for group in payload["groups"]["provider-model"].values())
+
+
+class FakePresetClient(FakeClient):
+    posted: list[tuple[str, dict]] = []
+    preset_config = {"model": "vendor/model", "provider": {"order": ["old/fp8"]}}
+    system_prompt = ""
+
+    def __init__(self) -> None:
+        type(self).posted = []
+
+    def get_preset(self, slug):
+        return {
+            "slug": slug,
+            "designated_version": {
+                "version": 1,
+                "config": self.preset_config,
+                "system_prompt": self.system_prompt,
+            },
+        }
+
+    def post_preset_config(self, slug, config):
+        type(self).posted.append((slug, config))
+        return {}
+
+
+def test_cheapest_compare_current(monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "OpenRouterClient", FakePresetClient)
+    monkeypatch.setattr(
+        FakePresetClient,
+        "preset_config",
+        {"model": "vendor/model", "provider": {"order": ["b/fp8"]}},
+    )
+
+    assert cli.main(["cheapest", "--preset", "p", "--compare-current", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["model"] == "vendor/model"
+    comparison = payload["comparison"]
+    assert comparison["current_order"] == ["b/fp8"]
+    assert comparison["current"]["endpoint"] == "b/fp8"
+    assert comparison["proposed"]["endpoint"] == "a/fp8"
+    assert comparison["delta_pct"] < 0
+
+    assert cli.main(["cheapest", "--preset", "p", "--compare-current"]) == 0
+    out = capsys.readouterr().out
+    assert "current order: b/fp8" in out
+    assert "proposed : a/fp8" in out
+    assert "mix cost" in out
+
+
+def test_cheapest_compare_current_requires_preset(monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    assert cli.main(["cheapest", "vendor/model", "--compare-current"]) == 1
+    assert "requires --preset" in capsys.readouterr().err
+
+
+class FakeDoctorClient:
+    def fetch_models_catalog(self):
+        return [{"id": "a"}]
+
+
+class FailingDoctorClient:
+    def fetch_models_catalog(self):
+        raise RuntimeError("offline")
+
+
+def write_refresh_config(tmp_path, session_paths, *, kind="preset", pi_model=None) -> Path:
+    sessions = Path(session_paths[0]).parent.parent / "**" / "*.jsonl"
+    target = f'''
+[[target]]
+name = "local"
+kind = "{kind}"
+model = "vendor/model"
+'''
+    if kind == "preset":
+        target += 'preset = "p"\n'
+    else:
+        target += f'pi_models_json = "{pi_model}"\npi_model_id = "@preset/main"\n'
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'''
+[paths]
+sessions_glob = "{sessions}"
+
+[refresh]
+days = 365
+anchor = "latest"
+{target}
+''',
+        encoding="utf-8",
+    )
+    return config
+
+
+def test_preset_plan_preferred_mode(monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "OpenRouterClient", FakePresetClient)
+    assert cli.main(["preset", "plan", "p", "--routing-mode", "preferred"]) == 0
+    out = capsys.readouterr().out
+    assert '"by": "price"' in out
+    assert '"order"' not in out
+    assert "dry run" in out
+    assert FakePresetClient.posted == []
+
+
+def test_refresh_cli_dry_run_and_apply(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    config = write_refresh_config(tmp_path, session_paths)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(cli, "OpenRouterClient", FakePresetClient)
+
+    assert cli.main(["refresh", "--config", str(config)]) == 0
+    captured = capsys.readouterr()
+    out = captured.out
+    assert "old order: old/fp8" in out
+    assert "new order: a/fp8" in out
+    assert "dry run" in out
+    assert "sticky routing" in captured.err
+    assert FakePresetClient.posted == []
+    assert not (tmp_path / "state" / "openrouter-routing" / "state.json").exists()
+
+    log = tmp_path / "refresh.log"
+    assert cli.main(["refresh", "--config", str(config), "--apply", "--compare", "--log-file", str(log)]) == 0
+    out = capsys.readouterr().out
+    assert "applied local" in out
+    assert "compare  :" in out
+    assert FakePresetClient.posted
+    assert "target local: applied" in log.read_text(encoding="utf-8")
+    state = tmp_path / "state" / "openrouter-routing" / "state.json"
+    assert state.exists()
+
+
+def test_refresh_cli_warns_about_preset_system_prompt(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    config = write_refresh_config(tmp_path, session_paths)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(cli, "OpenRouterClient", FakePresetClient)
+    monkeypatch.setattr(FakePresetClient, "system_prompt", "be careful")
+    assert cli.main(["refresh", "--config", str(config)]) == 0
+    captured = capsys.readouterr()
+    assert "system_prompt" in captured.err
+
+
+def test_refresh_cli_rejects_apply_with_dry_run(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    config = write_refresh_config(tmp_path, session_paths)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    assert cli.main(["refresh", "--config", str(config), "--apply", "--dry-run"]) == 1
+    assert "not both" in capsys.readouterr().err
+
+
+def test_doctor_cli(session_paths, monkeypatch, tmp_path, capsys) -> None:
+    models = tmp_path / "models.json"
+    models.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "openrouter": {
+                        "models": [
+                            {
+                                "id": "@preset/main",
+                                "compat": {"openRouterRouting": {"order": ["a/fp8"]}},
+                            }
+                        ]
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = write_refresh_config(tmp_path, session_paths, kind="pi-model", pi_model=models)
+    monkeypatch.setenv("PI_AGENT_DIR", str(tmp_path / "agent"))
+    monkeypatch.setattr(cli, "OpenRouterClient", FakeDoctorClient)
+    assert cli.main(["doctor", "--config", str(config)]) == 0
+    out = capsys.readouterr().out
+    assert "target local" in out
+    assert "network" in out
+
+    monkeypatch.setattr(cli, "OpenRouterClient", FailingDoctorClient)
+    assert cli.main(["doctor", "--config", str(config)]) == 1
+    assert "fail" in capsys.readouterr().out

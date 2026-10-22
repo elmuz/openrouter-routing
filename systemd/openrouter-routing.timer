@@ -1,0 +1,16 @@
+# Managed by `openrouter-routing install-systemd`.
+# Reinstall with --force to overwrite local edits.
+[Unit]
+Description=Daily OpenRouter provider routing refresh
+Documentation=https://github.com/elmuz/openrouter-routing
+
+[Timer]
+OnStartupSec=2min
+OnUnitActiveSec=1d
+Persistent=true
+RandomizedDelaySec=15min
+AccuracySec=1min
+Unit=openrouter-routing.service
+
+[Install]
+WantedBy=timers.target

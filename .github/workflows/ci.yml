@@ -25,7 +25,19 @@ jobs:
         run: uv run ruff check .
         env:
           UV_PYTHON: ${{ matrix.python }}
+      - name: Format
+        run: uv run ruff format --check .
+        env:
+          UV_PYTHON: ${{ matrix.python }}
       - name: Test
-        run: uv run pytest
+        run: uv run coverage run -m pytest
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+      - name: Coverage
+        run: uv run coverage report
+        env:
+          UV_PYTHON: ${{ matrix.python }}
+      - name: Build
+        run: uv build
         env:
           UV_PYTHON: ${{ matrix.python }}

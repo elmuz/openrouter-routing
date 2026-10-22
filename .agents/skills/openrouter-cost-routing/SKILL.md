@@ -34,11 +34,16 @@ difference in `references/openrouter-billing.md`.
 - Never score a no-cache endpoint at the measured `f`; collapse `f` and `fw` to
   zero for it.
 - `provider.order` disables OpenRouter's automatic sticky routing. Document the
-  tradeoff when changing routing modes.
+  tradeoff when changing routing modes. `preferred` mode keeps stickiness by
+  removing `order`, using `sort: price`, and emitting soft `preferred_*` floors.
 - Preset writes are full-config POSTs and create versions. Preserve unknown
   fields and skip no-op writes unless forced.
+- `refresh` plans every target before writing any target. A `pi-model` write
+  validates JSON, makes a timestamped backup, and atomically replaces
+  `models.json`; a failed plan leaves all targets untouched.
 - Tests must not touch the network.
-- Read-only commands must never mutate a preset or `models.json`.
+- Read-only commands must never mutate a preset or `models.json`. `refresh` is
+  dry-run unless `--apply` is passed.
 
 ## Verification workflow
 
@@ -48,10 +53,15 @@ uv run ruff check .
 uv run openrouter-routing measure --days 7 --by project
 uv run openrouter-routing cheapest <model> --mix examples/mix.json
 uv run openrouter-routing preset plan <slug> --mix examples/mix.json
+uv run openrouter-routing refresh --target <name>          # dry run
+uv run openrouter-routing verify --last 20
+uv run openrouter-routing doctor
 ```
 
-For an applied plan, compare recent `responseId`s with
-`GET /api/v1/generation?id=...` and check `total_cost`,
-`native_tokens_cached`, `cache_discount`, and `provider_name`. A mismatch usually
-means cache TTL, minimum cacheable prompt size, truncation, or cache-write
-pricing differs from the assumed mix.
+`verify` fetches recent `responseId`s with `GET /api/v1/generation?id=...` and
+compares the predicted cost with `total_cost`, while reporting
+`native_tokens_cached`, `cache_discount`, `provider_name`, and cache writes from
+the session. A mismatch usually means cache TTL, minimum cacheable prompt size,
+truncation, tokenizer normalization, or cache-write pricing differs from the
+assumed mix. `cheapest --preset <slug> --compare-current` compares the preset's
+current order with the proposed endpoint without writing.

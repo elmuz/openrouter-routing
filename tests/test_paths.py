@@ -10,6 +10,7 @@ def test_xdg_overrides(monkeypatch, tmp_path) -> None:
     assert paths.config_dir() == tmp_path / "cfg" / "openrouter-routing"
     assert paths.cache_dir() == tmp_path / "cache" / "openrouter-routing"
     assert paths.state_dir() == tmp_path / "state" / "openrouter-routing"
+    assert paths.systemd_user_dir() == tmp_path / "cfg" / "systemd" / "user"
 
 
 def test_config_env_override(monkeypatch, tmp_path) -> None:

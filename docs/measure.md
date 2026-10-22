@@ -31,8 +31,8 @@ openrouter-routing measure \
 ```
 
 Relative windows (`--hours`, `--days`) end at the latest record by default. That
-keeps ad-hoc analysis reproducible. `--anchor now` uses wall-clock time instead,
-which is what the future `refresh` workflow needs.
+keeps ad-hoc analysis reproducible. `--anchor now` uses wall-clock time instead;
+the scheduled [`refresh`](refresh.md) workflow defaults to wall clock.
 
 `--last-sessions N` selects whole sessions by their latest record and is applied
 *before* the time window, so `--last-sessions 3 --days 2` means "the last three
@@ -137,5 +137,8 @@ A saved mix JSON can be reused with `cheapest` and `preset plan`:
 openrouter-routing measure --days 7 --json > mix.json
 openrouter-routing cheapest deepseek/deepseek-v4-flash --mix mix.json
 ```
+
+To check the realized cost of those assumptions against OpenRouter's own
+`generation` records, see [Verify](verify.md).
 
 See the sample in [`examples/mix.json`](../examples/mix.json).

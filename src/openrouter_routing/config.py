@@ -46,13 +46,35 @@ ttft_pct = "p90"
 prefer = true
 max_price_from = 0
 
+[refresh]
+# The daily refresh defaults to a wall-clock window so a timer sees the same
+# data whether or not a session was active recently.
+days = 7
+anchor = "now"                 # refresh defaults to wall clock; measure keeps latest
+routing_mode = "order"         # order (pins endpoints) | preferred (sort: price + sticky)
+lock_timeout = 0
+# log_file = "~/.local/state/openrouter-routing/refresh.log"
+
 # Routing targets. Add one block per model/preset you want to refresh.
+# Each target can select its own mix with models/routed_models/projects.
 # [[target]]
 # name = "ds4-flash"
-# kind = "preset"              # preset | pi-model (pi-model lands in Phase 4)
+# kind = "preset"              # preset | pi-model
 # preset = "ds4-flash"
 # model = "~deepseek/deepseek-flash-latest"
+# routing_mode = "order"       # optional per-target override
+# projects = ["~/code"]
+# models = ["@preset/ds4-flash"]
+# routed_models = []
+# exclude_models = []
+# exclude_projects = []
+#
+# [[target]]
+# name = "local-ds4"
+# kind = "pi-model"
 # pi_model_id = "@preset/ds4-flash"
+# pi_provider = "openrouter"    # provider key in ~/.pi/agent/models.json
+# model = "~deepseek/deepseek-flash-latest"
 """
 
 
@@ -82,6 +104,18 @@ class MeasureConfig:
 
 
 @dataclass(frozen=True)
+class RefreshConfig:
+    days: float | None = 7
+    hours: float | None = None
+    since: str | None = None
+    until: str | None = None
+    anchor: str = "now"
+    routing_mode: str = "order"
+    lock_timeout: float = 0.0
+    log_file: Path | None = None
+
+
+@dataclass(frozen=True)
 class RankConfig:
     top: int | None = None
     healthy_only: bool = False
@@ -103,6 +137,13 @@ class TargetConfig:
     model: str | None = None
     pi_models_json: Path | None = None
     pi_model_id: str | None = None
+    pi_provider: str = "openrouter"
+    routing_mode: str | None = None
+    models: tuple[str, ...] = ()
+    routed_models: tuple[str, ...] = ()
+    exclude_models: tuple[str, ...] = ()
+    projects: tuple[str, ...] = ()
+    exclude_projects: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -112,6 +153,13 @@ class TargetConfig:
             "model": self.model,
             "pi_models_json": str(self.pi_models_json) if self.pi_models_json else None,
             "pi_model_id": self.pi_model_id,
+            "pi_provider": self.pi_provider,
+            "routing_mode": self.routing_mode,
+            "models": list(self.models),
+            "routed_models": list(self.routed_models),
+            "exclude_models": list(self.exclude_models),
+            "projects": list(self.projects),
+            "exclude_projects": list(self.exclude_projects),
         }
 
 
@@ -120,6 +168,7 @@ class AppConfig:
     paths: PathsConfig
     measure: MeasureConfig = field(default_factory=MeasureConfig)
     rank: RankConfig = field(default_factory=RankConfig)
+    refresh: RefreshConfig = field(default_factory=RefreshConfig)
     targets: tuple[TargetConfig, ...] = ()
     source_path: Path | None = None
     loaded: bool = False
@@ -151,6 +200,16 @@ class AppConfig:
                 "prefer": self.rank.prefer,
                 "max_price_from": self.rank.max_price_from,
                 "quant": self.rank.quant,
+            },
+            "refresh": {
+                "days": self.refresh.days,
+                "hours": self.refresh.hours,
+                "since": self.refresh.since,
+                "until": self.refresh.until,
+                "anchor": self.refresh.anchor,
+                "routing_mode": self.refresh.routing_mode,
+                "lock_timeout": self.refresh.lock_timeout,
+                "log_file": str(self.refresh.log_file) if self.refresh.log_file else None,
             },
             "targets": [target.to_dict() for target in self.targets],
         }
@@ -236,6 +295,43 @@ def _measure_from(data: dict[str, Any]) -> MeasureConfig:
     )
 
 
+def _routing_mode(value: Any, what: str, default: str | None = None) -> str | None:
+    mode = _as_str(value, what) or default
+    if mode is not None and mode not in {"order", "preferred"}:
+        raise ConfigError(f"{what} must be 'order' or 'preferred'")
+    return mode
+
+
+def _refresh_from(data: dict[str, Any], base: Path) -> RefreshConfig:
+    anchor = _as_str(data.get("anchor"), "refresh.anchor") or "now"
+    if anchor not in {"latest", "now"}:
+        raise ConfigError("refresh.anchor must be 'latest' or 'now'")
+    hours = _as_float(data.get("hours"), "refresh.hours")
+    days = _as_float(data.get("days"), "refresh.days")
+    if hours is None and days is None:
+        days = 7
+    log_raw = data.get("log_file")
+    log_file = None
+    if isinstance(log_raw, str):
+        log_file = expand_path(log_raw)
+        if not log_file.is_absolute():
+            log_file = base / log_file
+        log_file = log_file.resolve(strict=False)
+    lock_timeout = _as_float(data.get("lock_timeout"), "refresh.lock_timeout") or 0.0
+    if lock_timeout < 0:
+        raise ConfigError("refresh.lock_timeout must be non-negative")
+    return RefreshConfig(
+        days=days,
+        hours=hours,
+        since=_as_str(data.get("since"), "refresh.since"),
+        until=_as_str(data.get("until"), "refresh.until"),
+        anchor=anchor,
+        routing_mode=_routing_mode(data.get("routing_mode"), "refresh.routing_mode", "order") or "order",
+        lock_timeout=lock_timeout,
+        log_file=log_file,
+    )
+
+
 def _rank_from(data: dict[str, Any]) -> RankConfig:
     tps_pct = _as_str(data.get("tps_pct"), "rank.tps_pct") or "p90"
     ttft_pct = _as_str(data.get("ttft_pct"), "rank.ttft_pct") or "p90"
@@ -264,10 +360,14 @@ def _targets_from(data: Any, base: Path, pi_dir: Path) -> tuple[TargetConfig, ..
         return ()
     rows = data if isinstance(data, list) else [data]
     targets: list[TargetConfig] = []
+    seen: set[str] = set()
     for index, raw in enumerate(rows):
         if not isinstance(raw, dict):
             raise ConfigError(f"target[{index}] must be a table")
         name = _as_str(raw.get("name"), f"target[{index}].name") or f"target-{index}"
+        if name in seen:
+            raise ConfigError(f"duplicate target name: {name!r}")
+        seen.add(name)
         kind = _as_str(raw.get("kind"), f"target[{index}].kind") or "preset"
         if kind not in {"preset", "pi-model"}:
             raise ConfigError(f"target[{index}].kind must be 'preset' or 'pi-model'")
@@ -280,14 +380,22 @@ def _targets_from(data: Any, base: Path, pi_dir: Path) -> tuple[TargetConfig, ..
             pi_json = pi_json.resolve(strict=False)
         elif kind == "pi-model":
             pi_json = pi_dir / "models.json"
+        prefix = f"target[{index}]"
         targets.append(
             TargetConfig(
                 name=name,
                 kind=kind,
-                preset=_as_str(raw.get("preset"), f"target[{index}].preset"),
-                model=_as_str(raw.get("model"), f"target[{index}].model"),
+                preset=_as_str(raw.get("preset"), f"{prefix}.preset"),
+                model=_as_str(raw.get("model"), f"{prefix}.model"),
                 pi_models_json=pi_json,
-                pi_model_id=_as_str(raw.get("pi_model_id"), f"target[{index}].pi_model_id"),
+                pi_model_id=_as_str(raw.get("pi_model_id"), f"{prefix}.pi_model_id"),
+                pi_provider=_as_str(raw.get("pi_provider"), f"{prefix}.pi_provider") or "openrouter",
+                routing_mode=_routing_mode(raw.get("routing_mode"), f"{prefix}.routing_mode"),
+                models=_as_str_list(raw.get("models"), f"{prefix}.models"),
+                routed_models=_as_str_list(raw.get("routed_models"), f"{prefix}.routed_models"),
+                exclude_models=_as_str_list(raw.get("exclude_models"), f"{prefix}.exclude_models"),
+                projects=_as_str_list(raw.get("projects"), f"{prefix}.projects"),
+                exclude_projects=_as_str_list(raw.get("exclude_projects"), f"{prefix}.exclude_projects"),
             )
         )
     return tuple(targets)
@@ -318,9 +426,16 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     paths = _paths_from(data.get("paths") or {}, base)
     measure = _measure_from(data.get("measure") or {})
     rank = _rank_from(data.get("rank") or {})
+    refresh = _refresh_from(data.get("refresh") or {}, base)
     targets = _targets_from(data.get("target"), base, paths.pi_agent_dir)
     return AppConfig(
-        paths=paths, measure=measure, rank=rank, targets=targets, source_path=config_path, loaded=True
+        paths=paths,
+        measure=measure,
+        rank=rank,
+        refresh=refresh,
+        targets=targets,
+        source_path=config_path,
+        loaded=True,
     )
 
 
