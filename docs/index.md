@@ -11,6 +11,7 @@ straight to the command reference.
 | [How it works](how-it-works.md) | Token mix, `C_eff` formula, measured numbers, limitations |
 | [Measure](measure.md) | `measure`: time windows, filters, summaries, output formats |
 | [Routing](routing.md) | `cheapest`: endpoint ranking, `--provider-json`, routing semantics |
+| [Compare](compare.md) | `compare`: cheapest endpoint of two models under one token mix |
 | [Presets](presets.md) | `preset show`, `preset plan`, `preset rollback` |
 | [Refresh](refresh.md) | Daily `refresh` workflow, targets, routing modes, state and locks |
 | [Verify](verify.md) | Compare predicted cost with real OpenRouter generation records |

@@ -6,7 +6,7 @@ import sys
 from argparse import Namespace
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,7 @@ from .pricing import (
     score_endpoint,
 )
 from .refresh import RefreshResult, run_refresh
-from .routing import compare_current, compare_modes, emittable, provider_block, rank
+from .routing import compare_current, compare_models, compare_modes, emittable, provider_block, rank
 from .sessions import PiSessionSource
 from .targets import TargetPlan
 from .verify import DEFAULT_LAST, DEFAULT_TOLERANCE, VerifyResult, verify_generations
@@ -78,7 +78,7 @@ def _add_output_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="extra diagnostics on stderr")
 
 
-def _add_rank_args(parser: argparse.ArgumentParser, *, preset: bool = False) -> None:
+def _add_rank_args(parser: argparse.ArgumentParser, *, preset: bool = False, prefer: bool = True) -> None:
     parser.add_argument("--quant", default=None, help="comma separated quantizations (e.g. fp8,fp16)")
     parser.add_argument(
         "--healthy-only",
@@ -110,12 +110,13 @@ def _add_rank_args(parser: argparse.ArgumentParser, *, preset: bool = False) -> 
         choices=["p50", "p75", "p90", "p99"],
         help="latency percentile used by --max-ttft (default p90)",
     )
-    parser.add_argument(
-        "--prefer",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="also emit provider.preferred_min_throughput/preferred_max_latency",
-    )
+    if prefer:
+        parser.add_argument(
+            "--prefer",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="also emit provider.preferred_min_throughput/preferred_max_latency",
+        )
     if preset:
         parser.add_argument(
             "--top", type=int, default=None, help="keep only the N cheapest endpoints in order"
@@ -125,7 +126,7 @@ def _add_rank_args(parser: argparse.ArgumentParser, *, preset: bool = False) -> 
 def _rank_defaults(args: Namespace, cfg: AppConfig) -> None:
     cfg_rank = cfg.rank
     for name in ("healthy_only", "require_cache", "prefer"):
-        if getattr(args, name) is None:
+        if getattr(args, name, None) is None:
             setattr(args, name, getattr(cfg_rank, name))
     if args.quant is None:
         args.quant = cfg_rank.quant
@@ -630,6 +631,114 @@ def cmd_cheapest(args: Namespace) -> int:
     if args.min_tps is None and args.max_ttft is None:
         tip("--min-tps 40 (p90) / --max-ttft 6 to keep the cheap-but-slow endpoints out")
     tip(f"next: openrouter-routing cheapest {args.model} --mix {args.mix or 'mix.json'} --provider-json")
+    return 0
+
+
+def _print_compare(comparison: dict[str, Any], mix: dict[str, Any], f: float, r: float, fw: float) -> None:
+    a = comparison["a"]
+    b = comparison["b"]
+    best_cost = min(a["estimated_cost_usd"], b["estimated_cost_usd"])
+    provenance = f"f={f:.4f} R={r:.5f} fw={fw:.5f}"
+    if mix.get("requests"):
+        provenance += f" ({mix['requests']:,} requests)"
+    print(f"mix: {provenance}   snapshot {datetime.now(UTC).isoformat(timespec='seconds')}")
+    print()
+    print(
+        f"{'model':28} {'best endpoint':20} {'C_eff':>8} {'mix cost':>10} "
+        f"{'f_used':>7} {'ctx':>7} {'vs best':>8}"
+    )
+    for entry in (a, b):
+        cost = entry["estimated_cost_usd"]
+        if cost == best_cost:
+            delta = "—"
+        elif best_cost:
+            delta = f"+{100 * (cost / best_cost - 1):.1f}%"
+        else:
+            delta = "n/a"
+        ctx = entry["ctx"] if entry["ctx"] is not None else "-"
+        print(
+            f"{entry['model'][:28]:28} {entry['endpoint'][:20]:20} {entry['c_eff']:>8.4f} "
+            f"{cost:>10.6f} {entry['f_used']:>7.3f} {str(ctx):>7} {delta:>8}"
+        )
+    print()
+    if comparison["cheaper"] == "tie":
+        print(f"{a['model']} and {b['model']} cost the same at this mix.")
+    else:
+        winner = a if comparison["cheaper"] == "a" else b
+        loser = b if comparison["cheaper"] == "a" else a
+        print(
+            f"{winner['model']} is {comparison['delta_pct']:.1f}% cheaper than {loser['model']} at this mix."
+        )
+    for entry in (a, b):
+        if entry["status"] != 0:
+            warn(f"{entry['model']}: best endpoint {entry['endpoint']} has status {entry['status']}")
+        if not entry["cached"]:
+            warn(f"{entry['model']}: best endpoint {entry['endpoint']} cannot cache; scored at f=0")
+    print()
+    print(f"Note: {comparison['caveat']}")
+
+
+def cmd_compare(args: Namespace) -> int:
+    cfg = load_config(args.config)
+    _rank_defaults(args, cfg)
+    f, r, fw = DEFAULT_F, DEFAULT_R, DEFAULT_FW
+    mix = _load_mix(args.mix)
+    f = mix.get("f", f)
+    r = mix.get("R", r)
+    fw = mix.get("fw", fw)
+    f = args.f if args.f is not None else f
+    r = args.r if args.r is not None else r
+    fw = args.fw if args.fw is not None else fw
+
+    client = OpenRouterClient()
+    resolved_a, endpoints_a = resolve_model(args.model_a, client)
+    resolved_b, endpoints_b = resolve_model(args.model_b, client)
+    if resolved_a != args.model_a:
+        tip(f"// {args.model_a} is an alias -> resolving endpoints of {resolved_a}")
+    if resolved_b != args.model_b:
+        tip(f"// {args.model_b} is an alias -> resolving endpoints of {resolved_b}")
+    if not endpoints_a:
+        raise PlanError(f"{args.model_a}: no endpoints found")
+    if not endpoints_b:
+        raise PlanError(f"{args.model_b}: no endpoints found")
+
+    rows_a = [score_endpoint(endpoint, f, r, fw) for endpoint in endpoints_a]
+    rows_b = [score_endpoint(endpoint, f, r, fw) for endpoint in endpoints_b]
+    rows_a = [row for row in rows_a if row.slug]
+    rows_b = [row for row in rows_b if row.slug]
+    known_perf = sum(
+        1
+        for row in [*rows_a, *rows_b]
+        if pct_stat(row.tps, args.tps_pct) is not None or pct_stat(row.ttft, args.ttft_pct) is not None
+    )
+    if (args.min_tps is not None or args.max_ttft is not None) and not known_perf:
+        warn(
+            "no p50/p90 stats returned -- pass an API key (OPENROUTER_API_KEY) "
+            "or the perf filters cannot be applied"
+        )
+
+    counters = _comparison_mix(mix, f, r, fw)
+    comparison = compare_models(resolved_a, rows_a, resolved_b, rows_b, counters, **_rank_filters(args))
+
+    if args.json:
+        payload = {
+            "mix": {
+                "f": f,
+                "R": r,
+                "fw": fw,
+                "requests": mix.get("requests"),
+                "input": mix.get("input"),
+                "cacheRead": mix.get("cacheRead"),
+                "cacheWrite": mix.get("cacheWrite"),
+                "output": mix.get("output"),
+            },
+            "snapshot": datetime.now(UTC).isoformat(timespec="seconds"),
+            **comparison,
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    _print_compare(comparison, mix, f, r, fw)
     return 0
 
 
@@ -1199,6 +1308,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="set max_price caps from the Nth ranked endpoint (0 = best)",
     )
     cheapest.set_defaults(func=cmd_cheapest)
+
+    compare = sub.add_parser("compare", help="compare the cheapest endpoint of two models for one token mix")
+    _add_config_arg(compare)
+    _add_output_args(compare)
+    compare.add_argument("model_a", help="first model slug")
+    compare.add_argument("model_b", help="second model slug")
+    compare.add_argument(
+        "--mix", help="JSON file/'-' from measure --json (the same mix is used for both models)"
+    )
+    compare.add_argument("--f", type=float, default=None, help=f"cache-hit share (default {DEFAULT_F})")
+    compare.add_argument("--r", type=float, default=None, help=f"output/input ratio (default {DEFAULT_R})")
+    compare.add_argument(
+        "--fw", type=float, default=None, help=f"cache-write/input ratio (default {DEFAULT_FW})"
+    )
+    _add_rank_args(compare, prefer=False)
+    compare.add_argument("--json", action="store_true", help="machine-readable comparison")
+    compare.set_defaults(func=cmd_compare)
 
     preset = sub.add_parser("preset", help="inspect or rewrite an OpenRouter preset")
     preset_sub = preset.add_subparsers(dest="preset_command", required=True)

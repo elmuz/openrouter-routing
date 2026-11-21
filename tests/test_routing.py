@@ -6,6 +6,7 @@ from openrouter_routing.errors import PlanError
 from openrouter_routing.pricing import EndpointScore
 from openrouter_routing.routing import (
     compare_current,
+    compare_models,
     compare_modes,
     emittable,
     filter_scores,
@@ -100,6 +101,44 @@ def test_compare_modes_uses_cost_and_price_endpoints() -> None:
 
     with pytest.raises(PlanError):
         compare_modes([], {})
+
+
+def test_compare_models_uses_one_mix_for_both() -> None:
+    rows_a = [row("a/fp8", 0.5, in_price=1.0, out_price=2.0)]
+    rows_b = [row("b/fp8", 0.8, in_price=2.0, out_price=3.0)]
+    mix = {"input": 100, "cacheRead": 900, "output": 10, "cacheWrite": 0}
+
+    result = compare_models("vendor/a", rows_a, "vendor/b", rows_b, mix)
+
+    assert result["cheaper"] == "a"
+    assert result["cheaper_model"] == "vendor/a"
+    assert result["a"]["endpoint"] == "a/fp8"
+    assert result["b"]["endpoint"] == "b/fp8"
+    assert result["a"]["estimated_cost_usd"] == pytest.approx(210 / 1e6)
+    assert result["b"]["estimated_cost_usd"] == pytest.approx(320 / 1e6)
+    assert result["delta_usd"] == pytest.approx(110 / 1e6)
+    assert result["delta_pct"] == pytest.approx(110 / 320 * 100)
+    assert result["ratio"] == pytest.approx(320 / 210)
+    assert "Rough estimate" in result["caveat"]
+
+
+def test_compare_models_tie_and_filters() -> None:
+    rows = [row("a/fp8", 0.5, in_price=1.0, out_price=2.0)]
+    mix = {"input": 100, "cacheRead": 900, "output": 10, "cacheWrite": 0}
+    tie = compare_models("vendor/a", rows, "vendor/b", rows, mix)
+    assert tie["cheaper"] == "tie"
+    assert tie["cheaper_model"] is None
+    assert tie["delta_pct"] == 0.0
+
+    with pytest.raises(PlanError, match="vendor/a"):
+        compare_models(
+            "vendor/a",
+            [row("a/fp8", 0.5, status=-1)],
+            "vendor/b",
+            rows,
+            mix,
+            healthy_only=True,
+        )
 
 
 def test_compare_current_uses_first_existing_ordered_endpoint() -> None:

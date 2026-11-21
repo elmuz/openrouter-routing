@@ -1,7 +1,8 @@
 # Routing
 
 `cheapest` ranks the endpoints of one model by the real cost of your token mix
-(`C_eff`, see [How it works](how-it-works.md)).
+(`C_eff`, see [How it works](how-it-works.md)). To compare two models under the
+same mix, use [`compare`](compare.md).
 
 ```bash
 openrouter-routing cheapest deepseek/deepseek-v4-flash --mix mix.json

@@ -44,6 +44,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run openrouter-routing measure --days 7 --by project
 uv run openrouter-routing cheapest deepseek/deepseek-v4-flash --mix examples/mix.json
+uv run openrouter-routing compare deepseek/deepseek-v4-flash qwen/qwen3-235b-a22b --mix examples/mix.json
 uv run openrouter-routing preset plan ds4-flash --mix examples/mix.json
 uv run openrouter-routing refresh --target ds4-flash
 uv run openrouter-routing verify --last 20
@@ -55,9 +56,9 @@ uv run openrouter-routing doctor
 
 1. **No network in tests.** Inject `OpenRouterClient` or its opener; use fixture
    sessions. The default `uv run pytest` must work offline.
-2. **Read-only by default.** `plan`, `show`, `cheapest`, and `verify` must not
-   mutate OpenRouter. Any write requires an explicit `--apply` (today only
-   `refresh` and preset apply paths write).
+2. **Read-only by default.** `plan`, `show`, `cheapest`, `compare`, and
+   `verify` must not mutate OpenRouter. Any write requires an explicit `--apply`
+   (today only `refresh` and preset apply paths write).
 3. **Preserve unknown preset fields.** A preset update is a full-config POST;
    copy the current config and replace only fields this tool owns.
 4. **Skip no-op writes.** Do not create a preset version when `provider.order`
@@ -97,17 +98,18 @@ preset writes require credentials.
 ## Current project phase
 
 Phase 0–6 are implemented: packaging, git, tests, XDG config, the
-`measure` / `cheapest` / `preset` / `verify` CLI, full analysis filters,
+`measure` / `cheapest` / `compare` / `preset` / `verify` CLI, full analysis filters,
 `--anchor now`, `--last-sessions`, `--top-projects`, opt-in `--cost-model`, TSV
 output, session-source/robustness work, the `refresh` workflow with preset and
 local pi `models.json` targets, `order`/`preferred` routing modes, XDG state and
 locking, `--log-file`, `doctor`, the opt-in systemd user timer installer, and
-generation-record cost verification with `cheapest --compare-current`. See
+generation-record cost verification with `cheapest --compare-current`, and
+`compare` for pricing two models against one measured mix. See
 `PLAN.md` for the remaining release steps (manual `v0.2.0` tag and optional
 PyPI publication).
 
-`measure` is offline unless `--cost-model` is passed; `cheapest`, `preset`,
-`refresh`, `verify`, and `doctor` normally talk to OpenRouter. `refresh` and the
+`measure` is offline unless `--cost-model` is passed; `cheapest`, `compare`,
+`preset`, `refresh`, `verify`, and `doctor` normally talk to OpenRouter. `refresh` and the
 preset commands remain read-only unless `--apply` is passed. `install-systemd`
 is a preview unless `--enable` is passed. `verify` is read-only but always uses
 the network.

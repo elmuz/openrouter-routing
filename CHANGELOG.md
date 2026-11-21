@@ -8,6 +8,11 @@ semantic versioning once releases are tagged.
 
 ### Added
 
+- `compare MODEL_A MODEL_B --mix mix.json`: rank the cheapest endpoint of two
+  models with the same measured token mix and report which is cheaper and by
+  how much. The mix is a workload fingerprint, so a model with no history can
+  be priced against your real usage. The output always carries a rough-estimate
+  caveat (tokenizer, caching, output-length, quality, and context differences).
 - `verify`: compare the cost predicted from pi session tokens and OpenRouter
   endpoint prices with the actual `total_cost` from
   `GET /api/v1/generation?id=...`. Reports provider, cached tokens, cache

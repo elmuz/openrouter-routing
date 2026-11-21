@@ -146,6 +146,78 @@ def first_ordered_endpoint(rows: Iterable[EndpointScore], order: Iterable[str]) 
     return None
 
 
+COMPARE_CAVEAT = (
+    "Rough estimate, not a prediction: both models are scored with the same token "
+    "mix (f/R/fw) and the same token counts. It assumes their tokenizers produce "
+    "the same number of tokens for your text, that prompt caching behaves the same "
+    "way (TTL, minimum prompt size), and that output length is unchanged. It does "
+    "not price quality, retries, or context-window limits, and prices are a "
+    "snapshot that can change."
+)
+
+
+def _best_for(model: str, rows: Iterable[EndpointScore], filters: dict[str, Any]) -> EndpointScore:
+    try:
+        return rank(rows, **filters).best
+    except PlanError as exc:
+        raise PlanError(f"{model}: {exc}") from exc
+
+
+def compare_models(
+    model_a: str,
+    rows_a: Iterable[EndpointScore],
+    model_b: str,
+    rows_b: Iterable[EndpointScore],
+    counters: dict[str, Any],
+    **filters: Any,
+) -> dict[str, Any]:
+    """Compare the cheapest endpoint of two models under one token mix.
+
+    `counters` is the shared workload (input/cacheRead/cacheWrite/output token
+    counts). Both models are ranked with the same filters and priced with the
+    same counters, so the result answers "which model is cheaper for the work I
+    actually do", not "which model did I use more".
+    """
+    best_a = _best_for(model_a, rows_a, filters)
+    best_b = _best_for(model_b, rows_b, filters)
+    cost_a = estimated_cost(counters, best_a)
+    cost_b = estimated_cost(counters, best_b)
+
+    def entry(model: str, row: EndpointScore, cost: float) -> dict[str, Any]:
+        return {
+            "model": model,
+            "endpoint": row.slug,
+            "c_eff": row.cost,
+            "estimated_cost_usd": cost,
+            "f_used": row.f_used,
+            "cached": row.cached,
+            "ctx": row.ctx,
+            "quant": row.quant,
+            "status": row.status,
+            "uptime": row.uptime,
+        }
+
+    if cost_a < cost_b:
+        cheaper = "a"
+    elif cost_b < cost_a:
+        cheaper = "b"
+    else:
+        cheaper = "tie"
+    high = max(cost_a, cost_b)
+    low = min(cost_a, cost_b)
+    delta = high - low
+    return {
+        "a": entry(model_a, best_a, cost_a),
+        "b": entry(model_b, best_b, cost_b),
+        "cheaper": cheaper,
+        "cheaper_model": model_a if cheaper == "a" else model_b if cheaper == "b" else None,
+        "delta_usd": delta,
+        "delta_pct": (delta / high * 100) if high else 0.0,
+        "ratio": (high / low) if low else None,
+        "caveat": COMPARE_CAVEAT,
+    }
+
+
 def compare_current(
     rows: Iterable[EndpointScore],
     current_order: Iterable[str],

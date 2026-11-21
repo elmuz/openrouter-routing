@@ -131,11 +131,12 @@ row each for `overall`, each `--by` group, and each `--top-projects` entry.
 
 ## Saved mix
 
-A saved mix JSON can be reused with `cheapest` and `preset plan`:
+A saved mix JSON can be reused with `cheapest`, `compare`, and `preset plan`:
 
 ```bash
 openrouter-routing measure --days 7 --json > mix.json
 openrouter-routing cheapest deepseek/deepseek-v4-flash --mix mix.json
+openrouter-routing compare deepseek/deepseek-v4-flash qwen/qwen3-235b-a22b --mix mix.json
 ```
 
 To check the realized cost of those assumptions against OpenRouter's own

@@ -50,13 +50,16 @@ uv run openrouter-routing measure --days 7 --json > /tmp/mix.json
 # 3. Rank the endpoints of a model or preset alias
 uv run openrouter-routing cheapest '~deepseek/deepseek-flash-latest' --mix /tmp/mix.json
 
-# 4. Plan a preset update (read-only)
+# 4. Compare two models for the same mix (rough estimate, see docs/compare.md)
+uv run openrouter-routing compare MODEL_A MODEL_B --mix /tmp/mix.json
+
+# 5. Plan a preset update (read-only)
 uv run openrouter-routing preset plan ds4-flash --mix /tmp/mix.json --top 4
 
-# 5. Apply it explicitly
+# 6. Apply it explicitly
 uv run openrouter-routing preset plan ds4-flash --mix /tmp/mix.json --top 4 --apply
 
-# 6. Or refresh configured targets (dry run by default)
+# 7. Or refresh configured targets (dry run by default)
 uv run openrouter-routing refresh
 uv run openrouter-routing refresh --apply
 uv run openrouter-routing verify --last 20
@@ -67,8 +70,8 @@ uv run openrouter-routing install-systemd --mode daily
 uv run openrouter-routing install-systemd --mode daily --enable
 ```
 
-`measure`, `cheapest`, `preset show/plan`, `refresh`, and `verify` are
-read-only; writes require `--apply`. `measure` is fully offline unless
+`measure`, `cheapest`, `compare`, `preset show/plan`, `refresh`, and `verify`
+are read-only; writes require `--apply`. `measure` is fully offline unless
 `--cost-model` is passed, while `verify` always uses the network. The legacy
 `./measure.py`, `./cheapest.py`, and `./preset.py` wrappers still work.
 
@@ -79,6 +82,7 @@ read-only; writes require `--apply`. `measure` is fully offline unless
 | [How it works](docs/how-it-works.md) | Token mix, cost formula, measured numbers, limitations |
 | [Measure](docs/measure.md) | Time windows, filters, summaries, output formats |
 | [Routing](docs/routing.md) | Endpoint ranking, `--provider-json`, routing semantics |
+| [Compare](docs/compare.md) | Cheapest endpoint of two models under one token mix |
 | [Presets](docs/presets.md) | `preset show`, `plan`, `rollback` |
 | [Refresh](docs/refresh.md) | Daily refresh, targets, routing modes, state and locks |
 | [Verify](docs/verify.md) | Compare predicted cost with real OpenRouter generation records |

@@ -5,7 +5,7 @@ It is intentionally implementation-oriented: every phase lists deliverables,
 acceptance criteria, and the decisions that should not be silently changed.
 
 Repository: <https://github.com/elmuz/openrouter-routing>
-Last updated: 2026-10-23.
+Last updated: 2026-11-21.
 
 ## 1. Goals and constraints
 
@@ -508,6 +508,11 @@ an explicit, documented action with a reversible uninstall.
 - [x] `cheapest --compare-current --preset SLUG`: show the first still-available
       endpoint in the current order versus the proposed endpoint, with
       per-1M-token `C_eff` and measured-mix costs.
+- [x] `compare MODEL_A MODEL_B --mix mix.json`: rank the cheapest endpoint of
+      two models with the same measured mix and report the cheaper one and the
+      delta. The mix is a workload fingerprint, so a model with no history can
+      be priced against real usage. The output always carries a rough-estimate
+      caveat (tokenizer, caching, output length, quality, context, price drift).
 - [x] `refresh --compare` summary before apply (implemented in Phase 4).
 - [x] Weekly summary of cache-hit share and effective cost through the `verify`
       summary (`f`, `R`, `fw`, actual `C_eff`, cache discount, provider mix)
@@ -619,6 +624,7 @@ uv run openrouter-routing measure --days 30 --project ~/code --json
 uv run openrouter-routing cheapest '~deepseek/deepseek-flash-latest' --mix examples/mix.json
 uv run openrouter-routing cheapest deepseek/deepseek-v4-flash --mix examples/mix.json --provider-json
 uv run openrouter-routing cheapest --preset ds4-flash --mix examples/mix.json --compare-current
+uv run openrouter-routing compare deepseek/deepseek-v4-flash qwen/qwen3-235b-a22b --mix examples/mix.json
 uv run openrouter-routing preset show ds4-flash --versions 5
 uv run openrouter-routing preset plan ds4-flash --mix examples/mix.json --top 4
 uv run openrouter-routing refresh --target ds4-flash

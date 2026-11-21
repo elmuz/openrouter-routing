@@ -114,6 +114,101 @@ def test_cheapest_requires_healthy(capsys, monkeypatch, tmp_path) -> None:
     assert payload["cheapest"] == "a/fp8"
 
 
+class FakeCompareClient:
+    def fetch_endpoints(self, model):
+        if model == "vendor/cheap":
+            return {
+                "endpoints": [
+                    {
+                        "tag": "cheap/fp8",
+                        "pricing": {
+                            "prompt": "0.000001",
+                            "completion": "0.000002",
+                            "input_cache_read": "0.0000001",
+                        },
+                        "quantization": "fp8",
+                        "context_length": 128000,
+                        "status": 0,
+                    }
+                ]
+            }
+        if model == "vendor/pricey":
+            return {
+                "endpoints": [
+                    {
+                        "tag": "pricey/fp8",
+                        "pricing": {
+                            "prompt": "0.000002",
+                            "completion": "0.000003",
+                            "input_cache_read": "0.0000002",
+                        },
+                        "quantization": "fp8",
+                        "context_length": 256000,
+                        "status": 0,
+                    }
+                ]
+            }
+        if model == "vendor/free":
+            return {
+                "endpoints": [
+                    {
+                        "tag": "free/fp8",
+                        "pricing": {"prompt": "0", "completion": "0", "input_cache_read": "0"},
+                        "quantization": "fp8",
+                        "context_length": 128000,
+                        "status": 0,
+                    }
+                ]
+            }
+        return {"endpoints": []}
+
+    def fetch_models_catalog(self):
+        return []
+
+
+def test_compare_cli_text_and_json(monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "OpenRouterClient", FakeCompareClient)
+    mix = tmp_path / "mix.json"
+    mix.write_text(json.dumps({"f": 0.9, "R": 0.01, "fw": 0.0, "requests": 10}), encoding="utf-8")
+
+    assert cli.main(["compare", "vendor/cheap", "vendor/pricey", "--mix", str(mix)]) == 0
+    out = capsys.readouterr().out
+    assert "vendor/cheap is" in out
+    assert "cheaper than vendor/pricey" in out
+    assert "cheap/fp8" in out
+    assert "pricey/fp8" in out
+    assert "Rough estimate" in out
+    assert "10 requests" in out
+
+    assert cli.main(["compare", "vendor/cheap", "vendor/pricey", "--mix", str(mix), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["cheaper"] == "a"
+    assert payload["a"]["endpoint"] == "cheap/fp8"
+    assert payload["b"]["endpoint"] == "pricey/fp8"
+    assert payload["a"]["estimated_cost_usd"] < payload["b"]["estimated_cost_usd"]
+    assert payload["mix"]["f"] == 0.9
+    assert payload["mix"]["requests"] == 10
+    assert "Rough estimate" in payload["caveat"]
+    assert payload["snapshot"]
+
+
+def test_compare_cli_missing_model(monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "OpenRouterClient", FakeCompareClient)
+    assert cli.main(["compare", "vendor/cheap", "vendor/nope"]) == 1
+    assert "no endpoints found" in capsys.readouterr().err
+
+
+def test_compare_cli_free_model_does_not_divide_by_zero(monkeypatch, tmp_path, capsys) -> None:
+    set_missing_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "OpenRouterClient", FakeCompareClient)
+    assert cli.main(["compare", "vendor/free", "vendor/cheap"]) == 0
+    out = capsys.readouterr().out
+    assert "vendor/free is 100.0% cheaper" in out
+    assert "n/a" in out
+
+
 def test_rank_defaults_come_from_config(tmp_path) -> None:
     config = tmp_path / "config.toml"
     config.write_text(
