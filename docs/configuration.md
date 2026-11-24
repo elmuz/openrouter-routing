@@ -14,13 +14,48 @@ openrouter-routing config init       # writes a starter config
 openrouter-routing config show       # effective values as JSON
 ```
 
-Environment overrides: `OPENROUTER_ROUTING_CONFIG`, `PI_AGENT_DIR`,
-`OPENROUTER_API_KEY`, and the standard `XDG_*` variables.
+Environment overrides: `OPENROUTER_ROUTING_CONFIG`, `OPENROUTER_ROUTING_CREDENTIALS`,
+`OPENROUTER_ROUTING_ENV`, `PI_AGENT_DIR`, `OPENROUTER_API_KEY`,
+`OPENROUTER_MANAGEMENT_KEY`, and the standard `XDG_*` variables.
 
-Authentication uses `OPENROUTER_API_KEY` first, then the `openrouter` entry in
-`~/.pi/agent/auth.json`. Endpoint stats (`throughput_last_30m`,
-`latency_last_30m`) require an authenticated call; unauthenticated calls return
-null for them.
+## Credentials
+
+OpenRouter has two credential types and this tool needs both for different
+things. They are never interchangeable — an inference key is rejected on
+preset writes with `401 Invalid management key`, and a management key cannot
+run a completion.
+
+| use | 1st | 2nd | 3rd |
+|---|---|---|---|
+| reads: endpoints, `/generation`, preset GETs | `OPENROUTER_API_KEY` | `credentials` → `[openrouter] inference_key` | `~/.pi/agent/auth.json` (`openrouter`) |
+| writes: preset create/update | `OPENROUTER_MANAGEMENT_KEY` | `credentials` → `[openrouter] management_key` | — (hard error) |
+
+Kept out of pi's `auth.json` on purpose, `~/.config/openrouter-routing/credentials`
+(`chmod 600`) holds the project's own keys:
+
+```toml
+[openrouter]
+inference_key  = "sk-or-v1-..."   # optional
+management_key = "sk-or-v1-..."   # read-write management key, for --apply
+```
+
+Reads fall back to pi's key, so a single-file setup is enough for
+`measure`/`cheapest`/`verify`. Writes never fall back: if no management key is
+configured, `refresh --apply` and `preset ... --apply` stop with an explanatory
+error before touching the network.
+
+Management keys are created at <https://openrouter.ai/settings/management-keys>
+(or per workspace under **Keys → Management keys**), must be **read/write**, and
+are available in account scope (a provisioning key, which can touch every
+workspace) or workspace scope. Prefer workspace scope when you have more than
+one; the key can then only change presets in that workspace. Prefixes look like
+inference keys (`sk-or-v1-`), so the tool asks `GET /api/v1/key` for
+`is_management_key` instead of guessing. `doctor` reports which credential is in
+use for reads and writes.
+
+Endpoint stats (`throughput_last_30m`, `latency_last_30m`) require an
+authenticated call; unauthenticated calls return null for them. Preset and
+`/generation` reads require credentials too.
 
 ## Example config
 

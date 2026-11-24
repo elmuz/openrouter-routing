@@ -29,8 +29,20 @@ A no-op plan does **not** create a new version unless `--force` is passed.
 `preferred_*` floors instead of hard performance filters. `--dry-run` is an
 explicit form of the default read-only behavior.
 
-Authentication uses `OPENROUTER_API_KEY`, falling back to the OpenRouter entry
-in `~/.pi/agent/auth.json`. `show` and `plan` without `--apply` are read-only.
+`show` and `plan` without `--apply` are read-only and need only an inference
+credential. Writes need a **read-write management key**: OpenRouter rejects
+inference keys on `POST /presets/{slug}/chat/completions` with
+`401 Invalid management key`, and a management key cannot run completions.
+Configure it as `OPENROUTER_MANAGEMENT_KEY` or as `management_key` under
+`[openrouter]` in `~/.config/openrouter-routing/credentials`; see
+[Configuration](configuration.md#credentials).
+
+> **Behaviour change (November 2026).** This route accepted inference keys until
+> 2026-11-06 and now requires a management key. Keys did not change on the
+> client side, so an existing setup starts failing with `401 Invalid management
+> key` on the first scheduled run after the switch. `doctor` now reports write
+> capability, and `refresh --apply` fails before writing anything with an
+explanatory message instead of a bare 401.
 
 For scheduled, multi-target updates use [`refresh`](refresh.md), which wraps this
 preset backend and adds mix filters, state, locks, and the local pi target.

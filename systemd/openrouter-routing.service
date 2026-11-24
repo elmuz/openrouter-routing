@@ -8,6 +8,8 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+# OPENROUTER_MANAGEMENT_KEY for preset writes; absent file is not an error.
+EnvironmentFile=-@ENV_FILE@
 ExecStart=@EXEC_START@
 StandardOutput=journal
 StandardError=journal

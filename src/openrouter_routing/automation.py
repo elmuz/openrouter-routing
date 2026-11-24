@@ -15,6 +15,7 @@ from .fsutil import atomic_write_text
 SERVICE_NAME = "openrouter-routing.service"
 TIMER_NAME = "openrouter-routing.timer"
 EXEC_START_PLACEHOLDER = "@EXEC_START@"
+ENV_FILE_PLACEHOLDER = "@ENV_FILE@"
 
 Runner = Callable[[Sequence[str]], int]
 
@@ -75,15 +76,18 @@ def _systemd_argument(value: str) -> str:
     return f'"{escaped}"'
 
 
-def render_units(exec_start: Sequence[str]) -> UnitContents:
+def render_units(exec_start: Sequence[str], env_file: Path | None = None) -> UnitContents:
     if not exec_start:
         raise ConfigError("an ExecStart command is required")
     rendered = " ".join(_systemd_argument(part) for part in exec_start)
     service = _template(SERVICE_NAME)
     if EXEC_START_PLACEHOLDER not in service:
         raise ConfigError(f"{SERVICE_NAME} template has no {EXEC_START_PLACEHOLDER} placeholder")
+    if ENV_FILE_PLACEHOLDER not in service:
+        raise ConfigError(f"{SERVICE_NAME} template has no {ENV_FILE_PLACEHOLDER} placeholder")
+    environment = _systemd_argument(str(env_file or paths.env_file()))
     return UnitContents(
-        service=service.replace(EXEC_START_PLACEHOLDER, rendered),
+        service=service.replace(EXEC_START_PLACEHOLDER, rendered).replace(ENV_FILE_PLACEHOLDER, environment),
         timer=_template(TIMER_NAME),
     )
 

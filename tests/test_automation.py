@@ -27,12 +27,23 @@ def write_config(tmp_path: Path) -> Path:
     return config
 
 
-def test_tracked_templates_are_canonical() -> None:
-    contents = automation.render_units(("openrouter-routing",))
+def test_tracked_templates_are_canonical(tmp_path) -> None:
+    env_file = tmp_path / "env"
+    contents = automation.render_units(("openrouter-routing",), env_file=env_file)
     service_template = (ROOT / "systemd" / automation.SERVICE_NAME).read_text(encoding="utf-8")
     timer_template = (ROOT / "systemd" / automation.TIMER_NAME).read_text(encoding="utf-8")
-    assert contents.service == service_template.replace("@EXEC_START@", "openrouter-routing")
+    expected = service_template.replace(automation.EXEC_START_PLACEHOLDER, "openrouter-routing").replace(
+        automation.ENV_FILE_PLACEHOLDER, str(env_file)
+    )
+    assert contents.service == expected
     assert contents.timer == timer_template
+
+
+def test_service_reads_the_management_key_env_file(tmp_path) -> None:
+    env_file = tmp_path / "env"
+    contents = automation.render_units(("openrouter-routing",), env_file=env_file)
+    assert f"EnvironmentFile=-{env_file}" in contents.service
+    assert "EnvironmentFile=-@ENV_FILE@" not in contents.service
 
 
 def test_render_units_documents_semantics() -> None:

@@ -24,6 +24,8 @@ pricing, which dominates agentic workloads. See `docs/how-it-works.md` and
 - `src/openrouter_routing/verify.py` — generation-cost verification and divergence flags.
 - `src/openrouter_routing/state.py` — XDG state file and refresh lock.
 - `src/openrouter_routing/fsutil.py` — atomic writes and timestamped backups.
+- `src/openrouter_routing/paths.py` — XDG paths, including the credentials and
+  systemd env files (both outside pi's `auth.json`).
 - `src/openrouter_routing/automation.py` — opt-in systemd user unit installer.
 - `src/openrouter_routing/doctor.py` — config/session/auth/network/target checks.
 - `measure.py`, `cheapest.py`, `preset.py` — compatibility wrappers only.
@@ -90,7 +92,14 @@ uv run openrouter-routing doctor
 
 ## Auth
 
-`OPENROUTER_API_KEY` first, then `~/.pi/agent/auth.json` (`openrouter` entry).
+Two credential types, never interchangeable. Reads: `OPENROUTER_API_KEY`, then
+`[openrouter] inference_key` in `~/.config/openrouter-routing/credentials`, then
+`~/.pi/agent/auth.json` (`openrouter`). Writes (preset create/update):
+`OPENROUTER_MANAGEMENT_KEY`, then `[openrouter] management_key` in that same
+credentials file — never the inference key. OpenRouter rejects inference keys on
+preset writes with `401 Invalid management key` (it did accept them until
+2026-11-06), and management keys cannot run completions. Keep project keys out
+of pi's `auth.json`; `doctor` reports read and write credentials separately.
 Endpoint stats (`throughput_last_30m`, `latency_last_30m`) require an
 authenticated call; unauthenticated calls return null for them. `verify` and
 preset writes require credentials.

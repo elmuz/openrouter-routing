@@ -8,6 +8,16 @@ semantic versioning once releases are tagged.
 
 ### Added
 
+- Separate write credential: preset writes use `OPENROUTER_MANAGEMENT_KEY` or
+  `[openrouter] management_key` in `~/.config/openrouter-routing/credentials`,
+  and never fall back to the inference key. OpenRouter started rejecting
+  inference keys on `POST /presets/{slug}/chat/completions` with
+  `401 Invalid management key` in November 2026, which made every scheduled
+  `refresh --apply` fail silently in the journal while the plan kept printing.
+  A missing write key now fails before the network call with instructions.
+- `doctor` reports write capability separately (`auth write`) by asking
+  `GET /api/v1/key` for `is_management_key`; inference keys look identical to
+  management keys by prefix, so the flag is the only reliable check.
 - `compare MODEL_A MODEL_B --mix mix.json`: rank the cheapest endpoint of two
   models with the same measured token mix and report which is cheaper and by
   how much. The mix is a workload fingerprint, so a model with no history can
@@ -29,6 +39,13 @@ semantic versioning once releases are tagged.
 
 ### Changed
 
+- Credentials resolve as: reads `OPENROUTER_API_KEY` → `credentials`
+  `inference_key` → `~/.pi/agent/auth.json`; writes `OPENROUTER_MANAGEMENT_KEY`
+  → `credentials` `management_key`. Project keys stay out of pi's `auth.json`,
+  so rotating one no longer affects the other.
+- The systemd service template loads
+  `EnvironmentFile=-~/.config/openrouter-routing/env` (`-` tolerates a missing
+  file) so a timer run can see a management key without inheriting a shell.
 - `SessionRecord` now carries `responseId` for generation verification.
 - OpenRouter HTTP 404 responses raise `OpenRouterNotFound`, so expired
   generation records are reported instead of aborting a verification run.

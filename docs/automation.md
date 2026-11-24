@@ -75,12 +75,32 @@ journalctl --user -u openrouter-routing.service -f
 ```
 
 The user service does not inherit your interactive shell environment. The
-installer captures the config path, but `OPENROUTER_API_KEY` is not inherited.
-Use the `openrouter` entry in `~/.pi/agent/auth.json`, or expose the variable to
-the user manager explicitly (for example with a private
-`~/.config/environment.d/*.conf` file, never a committed secret). Without a key,
-endpoint performance statistics are null and the rank filters may not behave as
-intended.
+installer captures the config path and points the unit at the project's env
+file:
+
+```ini
+EnvironmentFile=-%h/.config/openrouter-routing/env
+```
+
+The leading `-` means a missing file is not an error. `refresh --apply` needs a
+read-write management key (see [Configuration](configuration.md#credentials)),
+so the timer reads it from that file (`chmod 600`, never committed):
+
+```bash
+printf 'OPENROUTER_MANAGEMENT_KEY=%s\n' "$KEY" > ~/.config/openrouter-routing/env
+chmod 600 ~/.config/openrouter-routing/env
+```
+
+Reads still work without it: the `openrouter` entry in `~/.pi/agent/auth.json`
+is used, or `OPENROUTER_API_KEY` / `inference_key` from the credentials file.
+Without any key endpoint performance statistics are null and the rank filters
+may not behave as intended.
+
+Management keys with an expiration date fail with `401 API key expired` once
+they lapse, and nothing retries: `journalctl --user -u openrouter-routing.service`
+shows it, `doctor` confirms the write credential, and a green run prints the
+applied plan. Rotate before that date, or leave the key without an expiration
+and delete it when you stop using the timer.
 
 ## Running while logged out
 

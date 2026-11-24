@@ -11,13 +11,19 @@ FIXTURES = Path(__file__).parent / "fixtures" / "sessions"
 
 
 class FakeClient:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(self, *, fail: bool = False, management: bool = True) -> None:
         self.fail = fail
+        self.management = management
 
     def fetch_models_catalog(self):
         if self.fail:
             raise RuntimeError("offline")
         return [{"id": "a"}, {"id": "b"}]
+
+    def fetch_key_info(self, *, write: bool = False):
+        if self.fail:
+            raise RuntimeError("offline")
+        return {"is_management_key": self.management, "is_provisioning_key": self.management}
 
 
 def make_models_json(tmp_path: Path) -> Path:
@@ -103,3 +109,43 @@ def test_doctor_warns_without_targets_or_sessions(tmp_path) -> None:
     assert names["sessions"].warning is True
     assert failed(checks) is False
     assert Check("x", True, "y").warning is False
+
+
+def preset_target() -> TargetConfig:
+    return TargetConfig(name="cloud", kind="preset", preset="ds4-flash", model="vendor/model")
+
+
+def test_doctor_ok_with_a_management_key(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("OPENROUTER_MANAGEMENT_KEY", "sk-management")
+    checks = run_doctor(
+        config(tmp_path, ()),
+        client=FakeClient(),
+        source=PiSessionSource(pattern=FIXTURES / "**" / "*.jsonl"),
+    )
+    write = next(check for check in checks if check.name == "auth write")
+    assert write.ok and not write.warning
+    assert "account scope" in write.detail
+
+
+def test_doctor_warns_without_a_management_key(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("OPENROUTER_MANAGEMENT_KEY", raising=False)
+    checks = run_doctor(
+        config(tmp_path, (preset_target(),)),
+        client=FakeClient(),
+        source=PiSessionSource(pattern=FIXTURES / "**" / "*.jsonl"),
+    )
+    write = next(check for check in checks if check.name == "auth write")
+    assert write.ok and write.warning is True
+    assert "401" in write.detail
+
+
+def test_doctor_fails_when_the_write_key_is_not_a_management_key(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("OPENROUTER_MANAGEMENT_KEY", "sk-inference")
+    checks = run_doctor(
+        config(tmp_path, (preset_target(),)),
+        client=FakeClient(management=False),
+        source=PiSessionSource(pattern=FIXTURES / "**" / "*.jsonl"),
+    )
+    write = next(check for check in checks if check.name == "auth write")
+    assert write.ok is False
+    assert failed(checks) is True

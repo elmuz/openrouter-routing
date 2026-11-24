@@ -42,6 +42,22 @@ def default_config_path() -> Path:
     return config_dir() / "config.toml"
 
 
+def credentials_file() -> Path:
+    """Project-local credentials, kept out of pi's auth.json."""
+    override = os.environ.get("OPENROUTER_ROUTING_CREDENTIALS")
+    if override:
+        return Path(override).expanduser()
+    return config_dir() / "credentials"
+
+
+def env_file() -> Path:
+    """Environment file for the systemd timer (management key for writes)."""
+    override = os.environ.get("OPENROUTER_ROUTING_ENV")
+    if override:
+        return Path(override).expanduser()
+    return config_dir() / "env"
+
+
 def state_file() -> Path:
     return state_dir() / "state.json"
 
